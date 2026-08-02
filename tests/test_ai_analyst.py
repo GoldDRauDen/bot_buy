@@ -39,10 +39,19 @@ class TestBuildPrompt:
         assert build_prompt({"prices": []}) == ""
 
     def test_prompt_no_speculation(self):
-        """Prompt yeu cau chi dung so lieu cung cap."""
+        """Prompt yeu cau chi dung so lieu cung cap + toi thieu 5 cau."""
         prompt = build_prompt(SAMPLE_PRICES)
-        assert "KHÔNG thêm số liệu khác" in prompt or "KHONG them so lieu khac" in prompt
+        assert "TỐI THIỂU 5 câu" in prompt
+        assert "KHÔNG được trả lời ngắn hơn 5 câu" in prompt
+        assert "Tổng quan phiên giao dịch" in prompt
+        assert "Diễn biến nổi bật" in prompt
         assert "Cảnh báo rủi ro" in prompt
+        assert "không bịa" in prompt
+
+    def test_prompt_extra_instruction(self):
+        """extra_instruction duoc them vao cuoi prompt."""
+        prompt = build_prompt(SAMPLE_PRICES, extra_instruction="Viết chi tiết hơn.")
+        assert "Viết chi tiết hơn." in prompt
 
 
 class TestAiAnalyst:
@@ -66,6 +75,11 @@ class TestAiAnalyst:
         # Prompt trong payload
         payload = mock_post.call_args.kwargs["json"]
         assert "ACB" in payload["contents"][0]["parts"][0]["text"]
+        # generationConfig moi
+        gen = payload["generationConfig"]
+        assert gen["maxOutputTokens"] == 1200
+        assert gen["temperature"] == 0.4
+        assert gen["candidateCount"] == 1
 
     def test_missing_key(self):
         analyst = AiAnalyst(config={})

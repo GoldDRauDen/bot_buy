@@ -52,13 +52,12 @@ def build_prompt(prices_report: Dict[str, Any],
 
     lines.append("")
     lines.append(
-        "Yêu cầu: phân tích NGẮN GỌN bằng tiếng Việt (tối đa 400 từ): "
-        "1) Tổng quan xu hướng thị trường; "
-        "2) Biến động % nổi bật; "
-        "3) Điểm đáng chú ý; "
-        "4) Cảnh báo rủi ro. "
-        "CHỈ dùng số liệu được cung cấp ở trên, KHÔNG thêm số liệu khác. "
-        "Nếu thiếu dữ liệu, hãy nói rõ."
+        "Yêu cầu: Hãy viết phân tích TỐI THIỂU 5 câu hoàn chỉnh, theo đúng 3 phần: "
+        "[1] Tổng quan phiên giao dịch - 2 câu, "
+        "[2] Diễn biến nổi bật và điểm đáng chú ý - 2 câu, "
+        "[3] Cảnh báo rủi ro - 1 câu. "
+        "KHÔNG được trả lời ngắn hơn 5 câu. "
+        "Chỉ dùng số liệu được cung cấp, không thêm số liệu khác, không bịa."
     )
     if extra_instruction:
         lines.append("")
@@ -108,8 +107,9 @@ class AiAnalyst:
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
-                        "temperature": 0.3,
-                        "maxOutputTokens": 800,
+                        "temperature": 0.4,
+                        "maxOutputTokens": 1200,
+                        "candidateCount": 1,
                     },
                 }
                 resp = requests.post(
@@ -159,8 +159,9 @@ class AiAnalyst:
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
-                        "temperature": 0.3,
-                        "maxOutputTokens": 800,
+                        "temperature": 0.4,
+                        "maxOutputTokens": 1200,
+                        "candidateCount": 1,
                     },
                 }
                 resp = requests.post(
