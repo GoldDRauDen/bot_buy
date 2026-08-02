@@ -86,10 +86,34 @@ class TestValidate:
     def test_valid(self):
         from analyst.ai_analyst import validate_analysis
         text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
-                "tư về thị trường chứng khoán Việt Nam hôm nay và các cổ phiếu trong "
-                "danh sách theo dõi.")
+                "tư về thị trường chứng khoán Việt Nam hôm nay, trong đó ACB giảm nhẹ "
+                "còn VCB tăng mạnh nhất trong danh sách theo dõi.")
         assert len(text) >= 120
         assert validate_analysis(text) is True
+
+    def test_missing_symbol(self):
+        """Khong chua ma watchlist -> False."""
+        from analyst.ai_analyst import validate_analysis
+        text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
+                "tư về thị trường chứng khoán Việt Nam hôm nay và các cổ phiếu trong "
+                "danh sách theo dõi.")
+        assert validate_analysis(text) is False
+
+    def test_no_diacritics(self):
+        """Thieu ky tu tieng Viet co dau -> False."""
+        from analyst.ai_analyst import validate_analysis
+        text = ("ACB VCB BID FPT HPG VNM VIC VHM GAS VPB. Day la mot doan phan tich dai "
+                "du voi nhieu thong tin huu ich cho nha dau tu ve thi truong chung khoan "
+                "Viet Nam hom nay va cac co phieu trong danh sach theo doi.")
+        assert validate_analysis(text) is False
+
+    def test_echo_prompt(self):
+        """Chua cum echo prompt -> False."""
+        from analyst.ai_analyst import validate_analysis
+        text = ("CHỈ nhắc đến ACB, VCB, BID, FPT, HPG, VNM, VIC, VHM, GAS, VPB trong "
+                "danh sách, không thêm bất kỳ thông tin nào khác như chỉ số thị trường "
+                "hay tin tức bên ngoài, chỉ dùng số liệu đã được cung cấp sẵn.")
+        assert validate_analysis(text) is False
 
     def test_too_short(self):
         from analyst.ai_analyst import validate_analysis
@@ -126,6 +150,7 @@ class TestAiAnalyst:
             result = analyst.analyze(SAMPLE_PRICES, api_key="test-key")
 
         assert result == valid_text
+        assert analyst.last_model == "gemini-2.0-flash"
         # Dung URL + key
         url = mock_post.call_args[0][0]
         assert "generateContent" in url
@@ -168,6 +193,8 @@ class TestAiAnalyst:
         # Fallback model dung
         url2 = mock_post.call_args_list[1][0][0]
         assert "gemini-flash-latest" in url2
+        # last_model ghi nhan model that su dung
+        assert analyst.last_model == "gemini-flash-latest"
 
     def test_model_429_fallback(self):
         """429 (rate limit) -> thu fallback gemini-flash-latest."""
@@ -278,3 +305,58 @@ class TestAiAnalyst:
         assert result == VALID_TEXT
         assert mock_post.call_count == 1
         assert "gemini-flash-latest" in mock_post.call_args[0][0]
+        assert analyst.last_model == "gemini-flash-latest"
+
+    def test_multipart_thought_skipped(self):
+        """Response 2 parts (thought + answer) -> lay dung answer."""
+        analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        thought_part = ("Người dùng muốn phân tích cổ phiếu Việt Nam, cần viết về các mã "
+                        "trong danh sách như ACB, VCB và nhấn mạnh điểm nổi bật cũng như "
+                        "cảnh báo rủi ro cho nhà đầu tư.")
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [
+                {"thought": True, "text": thought_part},
+                {"text": VALID_TEXT},
+            ]}}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_response):
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        # Chi lay part khong phai thought
+        assert result == VALID_TEXT
+        assert analyst.last_model == "gemini-2.0-flash"
+
+    def test_multipart_empty_text_skipped(self):
+        """Part text rong bi bo qua, gop cac part con lai."""
+        analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [
+                {"text": ""},
+                {"text": VALID_TEXT},
+            ]}}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_response):
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == VALID_TEXT
+
+    def test_garbage_echo_rejected(self):
+        """Response echo prompt -> reject, retry, van loi -> None."""
+        analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
+        garbage = ("CHỈ nhắc đến ACB, VCB, BID, FPT, HPG, VNM, VIC, VHM, GAS, VPB trong "
+                   "danh sách, không thêm bất kỳ thông tin nào khác như chỉ số thị trường "
+                   "hay tin tức bên ngoài, chỉ dùng số liệu đã được cung cấp sẵn.")
+        mock_garbage = MagicMock()
+        mock_garbage.status_code = 200
+        mock_garbage.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": garbage}]}}]
+        }
+        with patch("analyst.ai_analyst.requests.post",
+                   return_value=mock_garbage) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result is None
+        # 2 models x 2 attempts (retry 1 lan)
+        assert mock_post.call_count == 4
+        assert analyst.last_model is None

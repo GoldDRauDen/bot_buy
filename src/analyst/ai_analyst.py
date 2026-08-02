@@ -87,18 +87,52 @@ def postprocess_text(text: str) -> str:
     return " ".join(lines)
 
 
+WATCHLIST_PATTERN = re.compile(r"\b(ACB|VCB|BID|FPT|HPG|VNM|VIC|VHM|GAS|VPB)\b")
+VIETNAMESE_DIACRITICS = set("ếấộệữịảă")
+ECHO_PHRASES = ["CHỈ nhắc", "Strict", "unmentioned", "rule:", "VN-Index"]
+
+
+def extract_text_from_parts(parts: list) -> str:
+    """
+    Doc response dung: gop text cua cac part, BO QUA part co thought=True
+    hoac text rong (gemini-flash-latest tra ve nhieu parts, part dau co the
+    la suy nghi).
+    """
+    chunks = []
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("thought"):
+            continue
+        text = part.get("text")
+        if text and str(text).strip():
+            chunks.append(str(text).strip())
+    return "\n".join(chunks)
+
+
 def validate_analysis(text: str, min_length: int = 120) -> bool:
     """
-    Validation: text >= 120 ky tu VA KHONG chua 'Sentence' hoac '**'.
+    Validation manh:
+    - text >= 120 ky tu
+    - chua it nhat 1 ma watchlist (regex \b(ACB|VCB|BID|FPT|HPG|VNM|VIC|VHM|GAS|VPB)\b)
+    - co it nhat 2 ky tu tieng Viet co dau (vd 'ếấộệữịảă')
+    - KHONG chua cac cum echo prompt (CHỈ nhắc, Strict, unmentioned, rule:, VN-Index)
+      va khong chua 'Sentence' hoac '**'
     Tra False neu vi pham.
     """
     if not text or len(text) < min_length:
         return False
+    if not WATCHLIST_PATTERN.search(text):
+        return False
+    diacritics = [c for c in text if c in VIETNAMESE_DIACRITICS]
+    if len(diacritics) < 2:
+        return False
     lower = text.lower()
-    if "sentence" in lower:
+    if "sentence" in lower or "**" in text:
         return False
-    if "**" in text:
-        return False
+    for phrase in ECHO_PHRASES:
+        if phrase.lower() in lower:
+            return False
     return True
 
 
@@ -116,6 +150,7 @@ class AiAnalyst:
         self.config = config or {}
         self.model = self.config.get("model", DEFAULT_MODEL)
         self.timeout = int(self.config.get("timeout", 30))
+        self.last_model = None  # Model thuc su thanh cong o lan goi gan nhat
 
     def analyze(self, prices_report: Dict[str, Any],
                 api_key: str = None) -> Optional[str]:
@@ -158,14 +193,16 @@ class AiAnalyst:
                     )
                     if resp.status_code == 200:
                         data = resp.json()
-                        text = (data.get("candidates") or [{}])[0] \
-                            .get("content", {}).get("parts", [{}])[0].get("text", "")
+                        parts = (data.get("candidates") or [{}])[0] \
+                            .get("content", {}).get("parts", [])
+                        text = extract_text_from_parts(parts)
                         if text:
                             text = postprocess_text(text)
                             if validate_analysis(text):
                                 self.logger.info(
                                     f"Gemini {model} phan tich OK ({len(text)} chars)"
                                 )
+                                self.last_model = model
                                 return text
                             self.logger.warning(
                                 f"Gemini {model}: khong dat validation (lan {attempt + 1})"
@@ -227,12 +264,15 @@ class AiAnalyst:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    text = (data.get("candidates") or [{}])[0] \
-                        .get("content", {}).get("parts", [{}])[0].get("text", "")
+                    parts = (data.get("candidates") or [{}])[0] \
+                        .get("content", {}).get("parts", [])
+                    text = extract_text_from_parts(parts)
                     if text:
+                        text = postprocess_text(text)
                         self.logger.info(
                             f"Gemini {model} (retry) phan tich OK ({len(text)} chars)"
                         )
+                        self.last_model = model
                         return text
                     self.logger.warning(f"Gemini {model} (retry): response rong")
                 else:
@@ -270,7 +310,7 @@ def run_ai_analysis(logger: logging.Logger = None) -> Optional[str]:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({
                 "generated_at": datetime.now().isoformat(),
-                "model": analyst.model,
+                "model": analyst.last_model or analyst.model,
                 "analysis": text,
             }, f, indent=2, ensure_ascii=False)
         print(f"\n  AI phan tich OK ({len(text)} chars)")
