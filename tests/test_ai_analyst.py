@@ -26,7 +26,15 @@ SAMPLE_PRICES = {
 VALID_TEXT = (
     "Thị trường phiên hôm nay có sự phân hóa rõ rệt giữa các nhóm cổ phiếu trong "
     "danh sách theo dõi. ACB giảm nhẹ hơn 2% trong khi VCB tăng gần 5% nhờ dòng tiền "
-    "mạnh. Nhà đầu tư cần thận trọng với biến động ngắn hạn của các mã còn lại."
+    "mạnh. Nhà đầu tư cần thận trọng với biến động ngắn hạn của các mã còn lại và "
+    "theo dõi sát diễn biến khối ngoại để có quyết định hợp lý trong phiên tiếp theo."
+)
+
+# Text dai > 300 ky tu, hop le voi min_length=250
+LONG_TEXT = VALID_TEXT + (
+    " Bên cạnh đó, nhóm cổ phiếu trụ cột giữ vai trò dẫn dắt thị trường khi dòng tiền "
+    "tập trung vào các mã vốn hóa lớn. Phiên giao dịch hôm nay cho thấy tâm lý nhà đầu "
+    "tư vẫn thận trọng trước biến động của thị trường quốc tế."
 )
 
 
@@ -85,11 +93,8 @@ class TestValidate:
 
     def test_valid(self):
         from analyst.ai_analyst import validate_analysis
-        text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
-                "tư về thị trường chứng khoán Việt Nam hôm nay, trong đó ACB giảm nhẹ "
-                "còn VCB tăng mạnh nhất trong danh sách theo dõi.")
-        assert len(text) >= 120
-        assert validate_analysis(text) is True
+        assert len(LONG_TEXT) >= 250
+        assert validate_analysis(LONG_TEXT) is True
 
     def test_missing_symbol(self):
         """Khong chua ma watchlist -> False."""
@@ -140,11 +145,10 @@ class TestAiAnalyst:
         analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
         mock_response = MagicMock()
         mock_response.status_code = 200
-        valid_text = ("Thị trường phiên hôm nay có sự phân hóa rõ rệt giữa các nhóm cổ phiếu. "
-                      "ACB giảm nhẹ 2% trong khi VCB tăng gần 5% nhờ dòng tiền mạnh. "
-                      "Nhà đầu tư cần thận trọng với biến động ngắn hạn.")
+        valid_text = LONG_TEXT
         mock_response.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": valid_text}]}}]
+            "candidates": [{"content": {"parts": [{"text": valid_text}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_response) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="test-key")
@@ -182,13 +186,14 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_404, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
 
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 2
         # Fallback model dung
         url2 = mock_post.call_args_list[1][0][0]
@@ -203,13 +208,14 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_429, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
 
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 2
         assert "gemini-flash-latest" in mock_post.call_args_list[1][0][0]
 
@@ -220,12 +226,13 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_500, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 2
 
     def test_timeout_fallback(self):
@@ -235,12 +242,13 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[requests.Timeout("slow"), mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 2
 
     def test_empty_response_fallback(self):
@@ -252,12 +260,13 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_empty, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 2
 
     def test_both_fail_returns_none(self):
@@ -298,11 +307,12 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_ok) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert mock_post.call_count == 1
         assert "gemini-flash-latest" in mock_post.call_args[0][0]
         assert analyst.last_model == "gemini-flash-latest"
@@ -318,13 +328,13 @@ class TestAiAnalyst:
         mock_response.json.return_value = {
             "candidates": [{"content": {"parts": [
                 {"thought": True, "text": thought_part},
-                {"text": VALID_TEXT},
+                {"text": LONG_TEXT},
             ]}}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_response):
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         # Chi lay part khong phai thought
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
         assert analyst.last_model == "gemini-2.0-flash"
 
     def test_multipart_empty_text_skipped(self):
@@ -335,12 +345,12 @@ class TestAiAnalyst:
         mock_response.json.return_value = {
             "candidates": [{"content": {"parts": [
                 {"text": ""},
-                {"text": VALID_TEXT},
+                {"text": LONG_TEXT},
             ]}}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_response):
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == VALID_TEXT
+        assert result == LONG_TEXT
 
     def test_garbage_echo_rejected(self):
         """Response echo prompt -> reject, retry, van loi -> None."""
@@ -360,3 +370,75 @@ class TestAiAnalyst:
         # 2 models x 2 attempts (retry 1 lan)
         assert mock_post.call_count == 4
         assert analyst.last_model is None
+
+    def test_finish_reason_max_tokens(self):
+        """finishReason=MAX_TOKENS + text ngan -> reject (bi cat)."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        short = ("ACB giảm nhẹ hơn 2% trong khi VCB tăng gần 5% nhờ dòng tiền mạnh.")
+        mock_r = MagicMock()
+        mock_r.status_code = 200
+        mock_r.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": short}]},
+                            "finishReason": "MAX_TOKENS"}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_r) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result is None
+        # 1 model x 2 attempts
+        assert mock_post.call_count == 2
+
+    def test_finish_reason_stop_ok(self):
+        """finishReason=STOP + text dai -> OK."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_r = MagicMock()
+        mock_r.status_code = 200
+        mock_r.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_r):
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == LONG_TEXT
+
+    def test_text_200_chars_rejected(self):
+        """Text 200 ky tu (< 250) -> reject, retry, None."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        text_200 = LONG_TEXT[:200]
+        mock_r = MagicMock()
+        mock_r.status_code = 200
+        mock_r.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": text_200}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_r) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result is None
+        assert mock_post.call_count == 2
+
+    def test_text_300_chars_ok(self):
+        """Text 300 ky tu (>= 250) -> OK."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_r = MagicMock()
+        mock_r.status_code = 200
+        mock_r.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_r):
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == LONG_TEXT
+        assert len(result) >= 250
+
+    def test_settings_model_single_call(self):
+        """settings.model = gemini-flash-latest (= FALLBACK) -> chi goi 1 lan."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_r = MagicMock()
+        mock_r.status_code = 200
+        mock_r.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post", return_value=mock_r) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == LONG_TEXT
+        assert mock_post.call_count == 1

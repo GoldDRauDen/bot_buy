@@ -1,4 +1,4 @@
-app:
+﻿app:
   name: "Stock Scanner"
   version: "1.0.0"
 
@@ -46,7 +46,7 @@ telegram:
   chat_id: ""
 
 ai:
-  model: "gemini-2.0-flash"
+  model: "gemini-flash-latest"
   timeout: 30
   watchlist:
     - ACB
@@ -59,3 +59,4 @@ ai:
     - VHM
     - GAS
     - VPB
+

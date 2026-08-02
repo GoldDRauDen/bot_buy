@@ -24,6 +24,12 @@ except ImportError:
     from utils.config_loader import load_settings
 
 
+try:
+    from ..analyst.ai_analyst import MIN_ANALYSIS_LENGTH
+except ImportError:
+    MIN_ANALYSIS_LENGTH = 250
+
+
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_TEXT_LENGTH = 4000
 VIETSTOCK_URL = "https://finance.vietstock.vn/{symbol}/thong-ke-giao-dich.htm"
@@ -120,12 +126,13 @@ def _format_total_volume(value: Any) -> str:
 
 def _summarize_ai(text: str, ai_analyst=None, prices_report: Dict = None) -> Optional[str]:
     """
-    Chi giu AI text neu >= 120 ky tu. Neu ngan, thu lai 1 lan voi prompt
-    'phan tich chi tiet hon, it nhat 3 cau'. Van ngan -> tra None.
+    Chi giu AI text neu >= 250 ky tu (ngan hon = bi cat/qua ngan).
+    Neu ngan, thu lai 1 lan voi prompt 'phan tich chi tiet hon, it nhat 3 cau'.
+    Van ngan -> tra None.
     """
     if not text:
         return None
-    if len(text) >= 120:
+    if len(text) >= MIN_ANALYSIS_LENGTH:
         return text
     # Thu lai 1 lan voi prompt chi tiet hon
     try:
@@ -134,7 +141,7 @@ def _summarize_ai(text: str, ai_analyst=None, prices_report: Dict = None) -> Opt
                 "Phân tích chi tiết hơn, ít nhất 3 câu, dựa trên dữ liệu đã cung cấp.",
                 prices_report,
             )
-            if retry and len(retry) >= 120:
+            if retry and len(retry) >= MIN_ANALYSIS_LENGTH:
                 return retry
     except Exception:
         pass

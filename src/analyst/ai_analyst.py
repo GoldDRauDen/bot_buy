@@ -23,9 +23,12 @@ except ImportError:
 
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "{model}:generateContent")
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-flash-latest"
 # Model da chay thanh cong thuc te o du an khac
 FALLBACK_MODEL = "gemini-flash-latest"
+
+# Text phan tich toi thieu (ngan hon = bi cat hoac qua ngan)
+MIN_ANALYSIS_LENGTH = 250
 
 
 def build_prompt(prices_report: Dict[str, Any],
@@ -110,16 +113,16 @@ def extract_text_from_parts(parts: list) -> str:
     return "\n".join(chunks)
 
 
-def validate_analysis(text: str, min_length: int = 120) -> bool:
+def validate_analysis(text: str, min_length: int = MIN_ANALYSIS_LENGTH) -> bool:
     """
     Validation manh:
-    - text >= 120 ky tu
+    - text >= {MIN_ANALYSIS_LENGTH} ky tu (ngan hon = bi cat hoac qua ngan)
     - chua it nhat 1 ma watchlist (regex \b(ACB|VCB|BID|FPT|HPG|VNM|VIC|VHM|GAS|VPB)\b)
     - co it nhat 2 ky tu tieng Viet co dau (vd 'ếấộệữịảă')
     - KHONG chua cac cum echo prompt (CHỈ nhắc, Strict, unmentioned, rule:, VN-Index)
       va khong chua 'Sentence' hoac '**'
     Tra False neu vi pham.
-    """
+    """.format(MIN_ANALYSIS_LENGTH=MIN_ANALYSIS_LENGTH)
     if not text or len(text) < min_length:
         return False
     if not WATCHLIST_PATTERN.search(text):
@@ -193,8 +196,24 @@ class AiAnalyst:
                     )
                     if resp.status_code == 200:
                         data = resp.json()
-                        parts = (data.get("candidates") or [{}])[0] \
-                            .get("content", {}).get("parts", [])
+                        candidate = (data.get("candidates") or [{}])[0]
+                        parts = candidate.get("content", {}).get("parts", [])
+                        finish = candidate.get("finishReason")
+                        # Diagnostic: log day du response de tim nguyen nhan cat
+                        self.logger.info(
+                            f"Gemini {model}: finishReason={finish}, parts={len(parts)}"
+                        )
+                        for i, part in enumerate(parts):
+                            if isinstance(part, dict):
+                                ptxt = str(part.get("text", ""))[:200]
+                                self.logger.info(
+                                    f"  part[{i}] thought={part.get('thought', False)} "
+                                    f"text={ptxt!r}"
+                                )
+                        if finish == "MAX_TOKENS":
+                            self.logger.warning(
+                                f"Gemini {model}: finishReason=MAX_TOKENS - text bi cat"
+                            )
                         text = extract_text_from_parts(parts)
                         if text:
                             text = postprocess_text(text)
@@ -264,8 +283,16 @@ class AiAnalyst:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    parts = (data.get("candidates") or [{}])[0] \
-                        .get("content", {}).get("parts", [])
+                    candidate = (data.get("candidates") or [{}])[0]
+                    parts = candidate.get("content", {}).get("parts", [])
+                    finish = candidate.get("finishReason")
+                    self.logger.info(
+                        f"Gemini {model} (retry): finishReason={finish}, parts={len(parts)}"
+                    )
+                    if finish == "MAX_TOKENS":
+                        self.logger.warning(
+                            f"Gemini {model} (retry): finishReason=MAX_TOKENS - text bi cat"
+                        )
                     text = extract_text_from_parts(parts)
                     if text:
                         text = postprocess_text(text)

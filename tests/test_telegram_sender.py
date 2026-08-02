@@ -139,8 +139,11 @@ class TestBuildSummary:
         self._write_reports(tmp_path)
         long_analysis = ("Thị trường có xu hướng phân hóa rõ rệt trong phiên giao dịch. "
                          "Nhóm ngân hàng tăng mạnh nhờ dòng tiền lớn, trong khi cổ phiếu "
-                         "vốn hóa lớn khác điều chỉnh nhẹ. Nhà đầu tư cần theo dõi sát "
-                         "thanh khoản và diễn biến khối ngoại để đưa ra quyết định hợp lý.")
+                         "vốn hóa lớn khác điều chỉnh nhẹ. ACB giảm hơn 2% còn VCB tăng "
+                         "gần 5%, cho thấy dòng tiền đang tập trung vào nhóm ngân hàng. "
+                         "Nhà đầu tư cần theo dõi sát thanh khoản và diễn biến khối ngoại "
+                         "để đưa ra quyết định hợp lý, đồng thời thận trọng với biến động "
+                         "ngắn hạn của các cổ phiếu còn lại trong danh sách.")
         text = build_summary(str(tmp_path), real_prices=make_real_prices(),
                              ai_analysis=long_analysis)
         assert "PHÂN TÍCH AI" in text
@@ -161,8 +164,10 @@ class TestBuildSummary:
         long_retry = ("Phân tích chi tiết: thị trường chứng khoán Việt Nam ghi nhận "
                       "phiên giao dịch tích cực với sự dẫn dắt của nhóm cổ phiếu ngân hàng. "
                       "VCB tăng mạnh nhất với gần 5%, phản ánh kỳ vọng tích cực về kết quả "
-                      "kinh doanh. Các cổ phiếu khác có sự phân hóa, cần thận trọng khi "
-                      "giải ngân trong ngắn hạn.")
+                      "kinh doanh. ACB điều chỉnh nhẹ hơn 2% do áp lực chốt lời ngắn hạn. "
+                      "Các cổ phiếu khác có sự phân hóa, cần thận trọng khi giải ngân trong "
+                      "ngắn hạn. Nhà đầu tư nên quan sát thêm diễn biến thanh khoản trước "
+                      "khi đưa ra quyết định mua bán trong những phiên tới.")
         mock_analyst.analyze_with_prompt.return_value = long_retry
         text = build_summary(str(tmp_path), real_prices=make_real_prices(),
                              ai_analysis="Ngắn.", ai_analyst=mock_analyst)
