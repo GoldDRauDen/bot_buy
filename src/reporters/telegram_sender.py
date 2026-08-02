@@ -1,6 +1,6 @@
 """
 Telegram Report Sender - Gui bao cao pipeline qua Telegram bot.
-Task: Gui tom tat tieng Viet (~1500 ky tu) sau khi pipeline chay xong.
+Task: Gui tom tat day du tieng Viet (co dau, HTML-escape, max 4000 ky tu).
 
 Security:
 - Token bot la SECRET - chi doc tu env var TELEGRAM_BOT_TOKEN (hoac settings).
@@ -24,9 +24,9 @@ except ImportError:
 
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
-MAX_TEXT_LENGTH = 1500
-# Gioi han ky tu HTML an toan
-_HTML_CHARS = str.maketrans({"<": "&lt;", ">": "&gt;", "&": "&amp;"})
+MAX_TEXT_LENGTH = 4000
+# Timezone Asia/Bangkok (UTC+7)
+BANGKOK_OFFSET = 7 * 3600
 
 
 def _read_json(path: Path) -> Optional[Any]:
@@ -40,21 +40,50 @@ def _read_json(path: Path) -> Optional[Any]:
         return None
 
 
-def _count_capabilities(capability_report: Dict) -> Dict[str, int]:
-    """Dem so capability supported/unsupported/unknown."""
-    counts = {"supported": 0, "unsupported": 0, "unknown": 0}
+def _html_escape(text: Any) -> str:
+    """Escape ky tu HTML de an toan voi parse_mode=HTML."""
+    if text is None:
+        return ""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _bangkok_time(generated_at: Any = None) -> str:
+    """Chuyen thoi gian sang Asia/Bangkok (UTC+7)."""
+    if isinstance(generated_at, str):
+        try:
+            dt = datetime.fromisoformat(generated_at)
+        except (ValueError, TypeError):
+            dt = datetime.now()
+    else:
+        dt = datetime.now()
+    # Chuyen sang UTC roi +7 (fromisoformat co the co timezone)
+    if dt.tzinfo is None:
+        dt_utc = dt
+    else:
+        dt_utc = dt.astimezone()
+        dt_utc = dt_utc.replace(tzinfo=None)
+    from datetime import timedelta
+    bangkok = dt_utc + timedelta(seconds=BANGKOK_OFFSET)
+    return bangkok.strftime("%d/%m/%Y %H:%M")
+
+
+def _count_capabilities(capability_report: Dict) -> Dict[str, Dict[str, int]]:
+    """Dem capability supported/unsupported/unknown theo tung nguon."""
+    result = {}
     if not isinstance(capability_report, dict):
-        return counts
+        return result
     for src_key, caps in capability_report.items():
         if src_key == "generated_at" or not isinstance(caps, dict):
             continue
+        counts = {"supported": 0, "unsupported": 0, "unknown": 0}
         for cap_name, cap_data in caps.items():
             if not isinstance(cap_data, dict):
                 continue
             status = cap_data.get("status", "unknown")
             if status in counts:
                 counts[status] += 1
-    return counts
+        result[src_key] = counts
+    return result
 
 
 def _count_quality(quality_report: Dict) -> Dict[str, int]:
@@ -90,10 +119,43 @@ def _count_endpoints(discovery_report: Dict) -> int:
     return total
 
 
+def _pick_profiles(profiles: Dict) -> Dict[str, Dict]:
+    """
+    Chon profile noi bat moi nguon: uu tien co method != null va evidence_refs.
+    Tra ve {source_key: profile}.
+    """
+    result = {}
+    if not isinstance(profiles, dict):
+        return result
+    sources = profiles.get("sources") or {}
+    for src_key, src_data in sources.items():
+        if not isinstance(src_data, dict):
+            continue
+        items = src_data.get("profiles") or []
+        # Uu tien: method != null va co evidence_refs
+        def sort_key(p):
+            return (
+                1 if isinstance(p, dict) and p.get("method") else 0,
+                1 if isinstance(p, dict) and p.get("evidence_refs") else 0,
+            )
+        best = sorted(items, key=sort_key, reverse=True)[:3]
+        if best:
+            result[src_key] = best
+    return result
+
+
 def build_summary(base_dir: str = None, config: Dict = None) -> str:
     """
-    Tao text tom tat tieng Viet tu final_report + endpoint_profiles + quality_report.
-    Tra ve text (~1500 ky tu). Khong goi HTTP.
+    Tao bao cao day du tieng Viet co dau, HTML-escape, max 4000 ky tu.
+
+    Cau truc:
+    1. Header: BÁO CÁO STOCK SCANNER + thoi gian Asia/Bangkok
+    2. KET NOI: tung nguon (ten, url, http_status, response_time_ms, ssl_ok)
+    3. DISCOVERY: probe found/khong tung nguon + tong endpoint
+    4. API PROFILES: so profiles tung nguon + 3 vi du noi bat
+    5. CAPABILITY: breakdown supported/unsupported/unknown tung nguon
+    6. GHI CHU: giai thich supported=0 / quality=0 (trang thai that, khong phai loi)
+    7. PIPELINE: step ok/failed
     """
     if base_dir is None:
         base_dir = str(Path(__file__).parent.parent.parent)
@@ -105,64 +167,158 @@ def build_summary(base_dir: str = None, config: Dict = None) -> str:
     profiles = _read_json(output_dir / "endpoint_profiles.json") or {}
     quality = _read_json(output_dir / "quality_report.json") or {}
 
-    # Ngay gio
     generated_at = final.get("generated_at") or quality.get("generated_at") or datetime.now().isoformat()
-    try:
-        dt = datetime.fromisoformat(generated_at)
-        time_str = dt.strftime("%d/%m/%Y %H:%M")
-    except (ValueError, TypeError):
-        time_str = str(generated_at)[:16]
+    time_str = _bangkok_time(generated_at)
 
-    # So nguon
+    lines = []
+    # ---------- 1. HEADER ----------
+    lines.append("📊 <b>BÁO CÁO STOCK SCANNER</b>")
+    lines.append(f"🕐 Thời gian (Asia/Bangkok): {_html_escape(time_str)}")
+    lines.append("")
+
+    # ---------- 2. KẾT NỐI ----------
+    lines.append("🔌 <b>KẾT NỐI</b>")
     connectivity = final.get("connectivity") or {}
-    total_sources = connectivity.get("total_sources") if isinstance(connectivity, dict) else None
-    if total_sources is None:
-        # Dem tu capability_report
-        total_sources = sum(1 for k in (capability or {}) if k != "generated_at")
+    results = connectivity.get("results") if isinstance(connectivity, dict) else None
+    if isinstance(results, dict) and results:
+        for src_key, src_data in results.items():
+            if not isinstance(src_data, dict):
+                continue
+            name = _html_escape(src_data.get("name") or src_key.upper())
+            url = _html_escape(src_data.get("url") or "")
+            reachable = src_data.get("reachable")
+            status = src_data.get("http_status")
+            rt = src_data.get("response_time_ms")
+            ssl = src_data.get("ssl_ok")
+            if reachable:
+                ssl_txt = "SSL OK" if ssl else "SSL fallback"
+                lines.append(
+                    f"✅ {name}: HTTP {status} ({rt:.0f}ms, {ssl_txt})"
+                    if isinstance(rt, (int, float))
+                    else f"✅ {name}: HTTP {status} ({ssl_txt})"
+                )
+            else:
+                err = _html_escape(src_data.get("error") or "không xác định")
+                lines.append(f"❌ {name}: LỖI — {err[:100]}")
+                lines.append(f"   {url}")
+        reachable = connectivity.get("reachable")
+        total = connectivity.get("total_sources")
+        if isinstance(reachable, int) and isinstance(total, int):
+            lines.append(f"→ {reachable}/{total} nguồn OK")
+    else:
+        lines.append("⚠️ Không có dữ liệu kết nối")
+    lines.append("")
 
-    # Endpoint phat hien (discovery_report truc tiep)
-    endpoint_count = _count_endpoints(discovery)
+    # ---------- 3. DISCOVERY ----------
+    lines.append("🔍 <b>DISCOVERY</b>")
+    disc = final.get("discovery") if isinstance(final.get("discovery"), dict) else {}
+    probes = ["robots", "sitemap", "rss", "graphql", "swagger"]
+    for src_key, src_data in disc.items():
+        if src_key == "generated_at" or not isinstance(src_data, dict):
+            continue
+        name = _html_escape(src_key.upper())
+        found_parts = []
+        missing_parts = []
+        for probe in probes:
+            ep = src_data.get(probe)
+            if isinstance(ep, dict):
+                if ep.get("found"):
+                    found_parts.append(probe)
+                else:
+                    missing_parts.append(probe)
+        if found_parts:
+            lines.append(f"✅ {name}: found {', '.join(found_parts)}")
+        else:
+            lines.append(f"✅ {name}: kết nối OK, chưa tìm thấy probe tiêu chuẩn")
+        if missing_parts:
+            lines.append(f"   Không tìm thấy: {', '.join(missing_parts)}")
+    endpoint_total = _count_endpoints(discovery)
+    lines.append(f"→ Tổng endpoint phát hiện: {endpoint_total}")
+    lines.append("")
 
-    # Capability
-    cap_counts = _count_capabilities(capability)
+    # ---------- 4. API PROFILES ----------
+    lines.append("🧩 <b>API PROFILES</b>")
+    profiles_sources = (profiles.get("sources") or {}) if isinstance(profiles, dict) else {}
+    if profiles_sources:
+        for src_key, src_data in profiles_sources.items():
+            if not isinstance(src_data, dict):
+                continue
+            items = src_data.get("profiles") or []
+            name = _html_escape(src_key.upper())
+            lines.append(f"📌 {name}: {len(items)} profiles")
+            # 3 vi du noi bat
+            best = _pick_profiles(profiles).get(src_key, [])[:3]
+            for p in best:
+                method = _html_escape(p.get("method") or "?")
+                url = _html_escape(p.get("url") or "")
+                auth = p.get("authentication") or {}
+                auth_required = "có" if auth.get("required") else "không"
+                auth_type = _html_escape(auth.get("type")) if auth.get("type") else ""
+                csrf = "có" if p.get("csrf_required") else "không"
+                auth_txt = f", auth: {auth_required}"
+                if auth_type:
+                    auth_txt += f" ({auth_type})"
+                lines.append(f"   • {method} {url[:60]} — csrf: {csrf}{auth_txt}")
+    else:
+        lines.append("⚠️ Chưa có endpoint profiles")
+    lines.append("")
 
-    # Endpoint profiles
-    profile_count = 0
-    if isinstance(profiles, dict):
-        for src_key, src_data in (profiles.get("sources") or {}).items():
-            profile_count += len((src_data or {}).get("profiles") or [])
+    # ---------- 5. CAPABILITY ----------
+    lines.append("🎯 <b>CAPABILITY</b>")
+    cap_by_source = _count_capabilities(capability)
+    if cap_by_source:
+        for src_key, counts in cap_by_source.items():
+            name = _html_escape(src_key.upper())
+            lines.append(
+                f"📌 {name}: supported={counts['supported']}, "
+                f"unsupported={counts['unsupported']}, unknown={counts['unknown']}"
+            )
+    else:
+        lines.append("⚠️ Không có dữ liệu capability")
+    lines.append("")
 
-    # Quality
+    # ---------- 6. GHI CHÚ ----------
+    lines.append("📝 <b>GHI CHÚ</b>")
+    cap_counts_total = {"supported": 0, "unsupported": 0, "unknown": 0}
+    for counts in cap_by_source.values():
+        for k in cap_counts_total:
+            cap_counts_total[k] += counts[k]
     quality_counts = _count_quality(quality)
+    if cap_counts_total["supported"] == 0:
+        lines.append(
+            "• Capability supported=0: phân loại offline theo keyword "
+            "(không AI, không đoán), hầu hết endpoint chưa đủ bằng chứng nội dung "
+            "nên xếp <b>unknown</b> — đây là trạng thái thật, không phải lỗi."
+        )
+    if quality_counts["pass"] == 0 and quality_counts["fail"] == 0:
+        lines.append(
+            "• Quality pass=0: endpoint_plan trống (chưa có capability supported) "
+            "nên chưa fetch dữ liệu thật — pipeline dừng đúng theo thiết kế."
+        )
+    elif quality_counts["pass"] == 0:
+        lines.append(
+            "• Quality pass=0: dữ liệu fetch về chưa đạt tiêu chuẩn chất lượng "
+            "(empty/không phải JSON hợp lệ) — kiểm tra raw_data."
+        )
+    lines.append("")
 
-    # Pipeline status
+    # ---------- 7. PIPELINE ----------
+    lines.append("⚙️ <b>PIPELINE</b>")
     pipeline = final.get("pipeline") or {}
     steps = (pipeline.get("steps") or {}) if isinstance(pipeline, dict) else {}
-    failed_steps = [name for name, status in steps.items() if status != "ok"]
-
-    lines = [
-        "📊 <b>Stock Scanner - Bao cao</b>",
-        f"🕐 Thoi gian: {time_str}",
-        "",
-        f"🌐 Nguon: {total_sources or 0}",
-        f"🔍 Endpoint phat hien: {endpoint_count}",
-        f"✅ Capability supported: {cap_counts['supported']}",
-        f"❌ Capability unsupported: {cap_counts['unsupported']}",
-        f"❓ Capability unknown: {cap_counts['unknown']}",
-        f"🧩 Endpoint profiles: {profile_count}",
-        f"✅ Quality pass: {quality_counts['pass']}",
-        f"❌ Quality fail: {quality_counts['fail']}",
-    ]
-
-    if failed_steps:
-        lines.append("")
-        lines.append(f"⚠️ <b>LOI pipeline:</b> {', '.join(failed_steps)}")
-    elif steps:
-        lines.append("")
-        lines.append("✅ Pipeline hoan tat, khong loi")
+    if steps:
+        failed = [name for name, status in steps.items() if status != "ok"]
+        for name, status in steps.items():
+            mark = "✅" if status == "ok" else "❌"
+            lines.append(f"{mark} {_html_escape(name)}: {_html_escape(status)}")
+        if failed:
+            lines.append(f"⚠️ Có lỗi step: {', '.join(failed)}")
+        else:
+            lines.append("✅ Pipeline hoàn tất, không lỗi")
+    else:
+        lines.append("⚠️ Không có dữ liệu pipeline")
 
     text = "\n".join(lines)
-    # Cat an toan neu vuot gioi han
     if len(text) > MAX_TEXT_LENGTH:
         text = text[: MAX_TEXT_LENGTH - 3] + "..."
     return text
@@ -211,7 +367,7 @@ def send_telegram(text: str, token: str = None, chat_id: str = None,
 
     if not token or not chat_id:
         logger.warning("SKIP: thieu TELEGRAM_BOT_TOKEN hoac TELEGRAM_CHAT_ID (env/settings)")
-        print("⚠️ SKIP: thieu Telegram credentials (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+        print("⚠️ SKIP: thiếu Telegram credentials (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
 
     url = TELEGRAM_API.format(token=token)
