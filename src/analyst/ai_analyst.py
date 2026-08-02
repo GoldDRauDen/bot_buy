@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -162,6 +163,8 @@ class AiAnalyst:
           (tat suy nghi - gemini-flash-latest tieu thu token budget cho thinking).
         - An toan: neu 400/error voi thinkingConfig -> thu lai KHONG co
           thinkingConfig (van giu maxOutputTokens 8192).
+        - 429 (rate limit): log 'rate limited, waiting 60s...', time.sleep(60),
+          thu lai 1 lan cung payload. Van 429 -> (None, 429).
         Tra ve (data, status_code) hoac (None, status).
         """
         url = GEMINI_URL.format(model=model)
@@ -171,44 +174,51 @@ class AiAnalyst:
             "candidateCount": 1,
         }
 
+        def _post(payload):
+            """Gui request + retry 429 (60s) 1 lan. Tra (data, status)."""
+            for attempt in range(2):
+                try:
+                    resp = requests.post(
+                        url, params={"key": api_key}, json=payload,
+                        timeout=self.timeout,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    if resp.status_code == 200:
+                        return resp.json(), 200
+                    if resp.status_code == 429:
+                        self.logger.warning(
+                            f"Gemini {model}: rate limited, waiting 60s..."
+                            f" (lan {attempt + 1})"
+                        )
+                        if attempt == 0:
+                            time.sleep(60)
+                            continue
+                        return None, 429
+                    return None, resp.status_code
+                except requests.RequestException as e:
+                    self.logger.warning(f"Gemini {model} loi: {e}")
+                    return None, 0
+            return None, 429
+
         # Lan 1: co thinkingConfig
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": dict(base_config, thinkingConfig={"thinkingBudget": 0}),
         }
-        try:
-            resp = requests.post(
-                url, params={"key": api_key}, json=payload,
-                timeout=self.timeout,
-                headers={"Content-Type": "application/json"},
-            )
-            if resp.status_code == 200:
-                return resp.json(), 200
-            if resp.status_code != 400:
-                # Loi khac 400 (404/429/5xx...) khong phai do thinkingConfig
-                return None, resp.status_code
-            self.logger.warning(
-                f"Gemini {model}: 400 voi thinkingConfig - thu lai khong thinkingConfig"
-            )
-        except requests.RequestException as e:
-            self.logger.warning(f"Gemini {model} loi: {e}")
-            return None, 0
+        data, status = _post(payload)
+        if status == 200 or status != 400:
+            # OK hoac loi khong phai 400 (404/429/5xx...) - khong thu thinkingConfig fallback
+            return data, status
+        self.logger.warning(
+            f"Gemini {model}: 400 voi thinkingConfig - thu lai khong thinkingConfig"
+        )
 
         # Lan 2: khong thinkingConfig (400 do model khong ho tro)
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": base_config,
         }
-        try:
-            resp = requests.post(
-                url, params={"key": api_key}, json=payload,
-                timeout=self.timeout,
-                headers={"Content-Type": "application/json"},
-            )
-            return resp.json(), resp.status_code
-        except requests.RequestException as e:
-            self.logger.warning(f"Gemini {model} loi: {e}")
-            return None, 0
+        return _post(payload)
 
     def analyze(self, prices_report: Dict[str, Any],
                 api_key: str = None) -> Optional[str]:

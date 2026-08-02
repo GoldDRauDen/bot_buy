@@ -202,8 +202,8 @@ class TestAiAnalyst:
         # last_model ghi nhan model that su dung
         assert analyst.last_model == "gemini-flash-latest"
 
-    def test_model_429_fallback(self):
-        """429 (rate limit) -> thu fallback gemini-flash-latest."""
+    def test_rate_limit_retries_same_model(self):
+        """429 -> retry cung model (khong fallback) -> 200 OK."""
         analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
         mock_429 = MagicMock(status_code=429, text="rate limited")
         mock_ok = MagicMock()
@@ -214,11 +214,14 @@ class TestAiAnalyst:
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_429, mock_ok]) as mock_post:
-            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+            with patch("analyst.ai_analyst.time.sleep") as mock_sleep:
+                result = analyst.analyze(SAMPLE_PRICES, api_key="k")
 
         assert result == LONG_TEXT
         assert mock_post.call_count == 2
-        assert "gemini-flash-latest" in mock_post.call_args_list[1][0][0]
+        mock_sleep.assert_called_once_with(60)
+        # 429 retry cung model 2.0-flash, KHONG fallback sang flash-latest
+        assert "gemini-2.0-flash" in mock_post.call_args_list[1][0][0]
 
     def test_5xx_fallback(self):
         """500 -> thu fallback."""
@@ -271,15 +274,16 @@ class TestAiAnalyst:
         assert mock_post.call_count == 2
 
     def test_both_fail_returns_none(self):
-        """Ca 2 model deu that bai -> None."""
+        """Ca 2 model deu 429 -> None."""
         analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
         mock_429 = MagicMock(status_code=429, text="rate limited")
-        mock_500 = MagicMock(status_code=500, text="server error")
         with patch("analyst.ai_analyst.requests.post",
-                   side_effect=[mock_429, mock_500, mock_429, mock_500]) as mock_post:
-            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+                   return_value=mock_429) as mock_post:
+            with patch("analyst.ai_analyst.time.sleep"):
+                result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         assert result is None
-        assert mock_post.call_count == 4
+        # 2 models x 2 attempts x 2 lan (429 retry)
+        assert mock_post.call_count == 8
 
     def test_http_error_no_fallback(self):
         """Loi 500 -> thu fallback, ca 2 loi -> None."""
@@ -476,4 +480,34 @@ class TestAiAnalyst:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         assert result is None
         # 1 model x 2 attempts x 2 lan (with/without thinkingConfig)
+        assert mock_post.call_count == 4
+
+    def test_rate_limit_retry_ok(self):
+        """429 -> sleep 60s -> thu lai -> 200 OK."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_429 = MagicMock(status_code=429, text="rate limited")
+        mock_ok = MagicMock()
+        mock_ok.status_code = 200
+        mock_ok.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post",
+                   side_effect=[mock_429, mock_ok]) as mock_post:
+            with patch("analyst.ai_analyst.time.sleep") as mock_sleep:
+                result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == LONG_TEXT
+        assert mock_post.call_count == 2
+        mock_sleep.assert_called_once_with(60)
+
+    def test_rate_limit_twice_none(self):
+        """429 lien tuc -> None (retry 1 lan cung payload, van 429 thi bo)."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_429 = MagicMock(status_code=429, text="rate limited")
+        with patch("analyst.ai_analyst.requests.post",
+                   return_value=mock_429) as mock_post:
+            with patch("analyst.ai_analyst.time.sleep"):
+                result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result is None
+        # 1 model x 2 attempts (retry validation) x 2 lan (429 retry)
         assert mock_post.call_count == 4
