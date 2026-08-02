@@ -1,5 +1,5 @@
 """
-Unit tests cho Telegram report sender (format day du).
+Unit tests cho Telegram report sender (format nha dau tu).
 Offline tests: build_summary voi report mau, send_telegram monkeypatch requests,
 thieu credential -> skip. Khong co network.
 """
@@ -15,292 +15,162 @@ from reporters.telegram_sender import (
 )
 
 
-class TestBuildSummary:
-    """Test build_summary format day du."""
+def make_real_prices():
+    """Du lieu gia that mau."""
+    return {
+        "prices": [
+            {"symbol": "ACB", "price": "21,900", "change_percent": "(-2.01%)",
+             "volume": "15,165,000", "trading_date": "31/07/2026 14:58",
+             "source_url": "https://finance.vietstock.vn/ACB/thong-ke-giao-dich.htm"},
+            {"symbol": "VCB", "price": "59,300", "change_percent": "(+4.96%)",
+             "volume": "18,314,600", "trading_date": "31/07/2026 14:58",
+             "source_url": "https://finance.vietstock.vn/VCB/thong-ke-giao-dich.htm"},
+            {"symbol": "FPT", "price": "67,100", "change_percent": "(+0.15%)",
+             "volume": "6,253,600", "trading_date": "31/07/2026 14:58",
+             "source_url": "https://finance.vietstock.vn/FPT/thong-ke-giao-dich.htm"},
+        ]
+    }
 
-    def _write_reports(self, tmp_path, final=None, quality=None, profiles=None,
-                       capability=None, discovery=None):
+
+class TestBuildSummary:
+    """Test build_summary format nha dau tu."""
+
+    def _write_reports(self, tmp_path, final=None):
         out = tmp_path / "output"
         out.mkdir(parents=True, exist_ok=True)
-
         default_final = {
             "generated_at": "2026-08-02T10:00:00.000000",
-            "pipeline": {
-                "steps": {
-                    "connectivity": "ok", "discovery": "ok", "capability": "ok",
-                    "index": "ok", "endpoint_plan": "ok", "quality": "ok",
-                }
-            },
-            "connectivity": {
-                "total_sources": 2, "reachable": 2, "unreachable": 0,
-                "results": {
-                    "hose": {"name": "HOSE", "url": "https://www.hsx.vn/",
-                             "reachable": True, "http_status": 200,
-                             "response_time_ms": 266.98, "ssl_ok": True,
-                             "error": None},
-                    "hnx": {"name": "HNX", "url": "https://www.hnx.vn/",
-                            "reachable": True, "http_status": 200,
-                            "response_time_ms": 360.12, "ssl_ok": False,
-                            "error": None},
-                },
-            },
-            "discovery": {
-                "hose": {
-                    "robots": {"found": True}, "sitemap": {"found": False},
-                    "rss": {"found": False}, "graphql": {"found": False},
-                    "swagger": {"found": False},
-                },
-                "hnx": {
-                    "robots": {"found": True}, "sitemap": {"found": False},
-                    "rss": {"found": True}, "graphql": {"found": False},
-                    "swagger": {"found": False},
-                },
-            },
+            "pipeline": {"steps": {"connectivity": "ok", "discovery": "ok"}},
+            "connectivity": {"total_sources": 2, "reachable": 2, "unreachable": 0,
+                             "results": {}},
+            "discovery": {},
         }
-        default_quality = {
-            "generated_at": "2026-08-02T10:00:00.000000",
-            "hose": {"stock_list": {"quality": "pass"}},
-        }
-        default_profiles = {
-            "sources": {
-                "hose": {
-                    "profiles": [
-                        {"method": "GET", "url": "/api/v1/stocks",
-                         "authentication": {"required": True, "type": "bearer"},
-                         "csrf_required": True, "evidence_refs": [{"field": "x"}]},
-                        {"method": None, "url": "/api/other",
-                         "authentication": {"required": False, "type": None},
-                         "csrf_required": False},
-                    ]
-                },
-                "hnx": {
-                    "profiles": [
-                        {"method": "POST", "url": "/Home/GetDataArticles",
-                         "authentication": {"required": False, "type": None},
-                         "csrf_required": False, "evidence_refs": [{"field": "y"}]},
-                    ]
-                },
-            }
-        }
-        default_capability = {
-            "generated_at": "2026-08-02T10:00:00.000000",
-            "hose": {
-                "stock_list": {"status": "supported"},
-                "current_price": {"status": "unsupported"},
-                "historical_price": {"status": "unknown"},
-            },
-            "hnx": {
-                "stock_list": {"status": "unknown"},
-                "current_price": {"status": "unknown"},
-            },
-        }
-        default_discovery = {
-            "hose": {"api_tests": [{"url": "/a"}, {"url": "/b"}], "robots": {"url": "/robots"}},
-            "hnx": {"api_tests": [{"url": "/c"}]},
-        }
-
-        for name, data in [
-            ("final_report.json", final if final is not None else default_final),
-            ("quality_report.json", quality if quality is not None else default_quality),
-            ("endpoint_profiles.json", profiles if profiles is not None else default_profiles),
-            ("capability_report.json", capability if capability is not None else default_capability),
-            ("discovery_report.json", discovery if discovery is not None else default_discovery),
-        ]:
-            (out / name).write_text(json.dumps(data), encoding="utf-8")
+        (out / "final_report.json").write_text(
+            json.dumps(final if final is not None else default_final),
+            encoding="utf-8")
+        (out / "quality_report.json").write_text(
+            json.dumps({"generated_at": "2026-08-02T10:00:00"}), encoding="utf-8")
 
     def test_header(self, tmp_path):
-        """Header + thoi gian truc tiep (khong chuyen doi timezone)."""
+        """Header moi + gio Viet Nam + phien."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        assert "BÁO CÁO CHỨNG KHOÁN" in text
+        assert "giờ Việt Nam, UTC+7" in text
+        assert "Asia/Bangkok" not in text
+        assert "Dữ liệu phiên: 31/07/2026" in text
+
+    def test_market_section(self, tmp_path):
+        """THI TRUONG: so ma tang/giam/dung + tong KL."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        assert "THỊ TRƯỜNG" in text
+        assert "Tăng: 2" in text
+        assert "Giảm: 1" in text
+        assert "Đứng giá: 0" in text
+        assert "Tổng khối lượng" in text
+
+    def test_watchlist_section(self, tmp_path):
+        """WATCHLIST: tung ma 1 dong gon."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        assert "WATCHLIST" in text
+        assert "📌 ACB: 21,900 VND (-2.01%) | KL 15,165,000" in text
+        assert "📌 VCB: 59,300 VND (+4.96%) | KL 18,314,600" in text
+        assert "📌 FPT: 67,100 VND (+0.15%) | KL 6,253,600" in text
+        # Khong con ngoac kep
+        assert "((-2.01%))" not in text
+
+    def test_highlights_section(self, tmp_path):
+        """DIEM NHAN: top tang + top giam."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        assert "ĐIỂM NHẤN" in text
+        assert "Tăng mạnh nhất: VCB (+4.96%)" in text
+        assert "Giảm mạnh nhất: ACB (-2.01%)" in text
+
+    def test_ai_section_long(self, tmp_path):
+        """AI text >= 120 ky tu -> hien thi."""
+        self._write_reports(tmp_path)
+        long_analysis = ("Thị trường có xu hướng phân hóa rõ rệt trong phiên giao dịch. "
+                         "Nhóm ngân hàng tăng mạnh nhờ dòng tiền lớn, trong khi cổ phiếu "
+                         "vốn hóa lớn khác điều chỉnh nhẹ. Nhà đầu tư cần theo dõi sát "
+                         "thanh khoản và diễn biến khối ngoại để đưa ra quyết định hợp lý.")
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis=long_analysis)
+        assert "PHÂN TÍCH AI" in text
+        assert "phân hóa" in text
+
+    def test_ai_section_short_no_retry(self, tmp_path):
+        """AI text ngan + khong co analyst -> bao 'chua dat'."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis="Ngắn quá.")
+        assert "PHÂN TÍCH AI" in text
+        assert "chưa đạt (quá ngắn)" in text
+
+    def test_ai_section_short_with_retry(self, tmp_path):
+        """AI text ngan + co analyst retry -> dung text dai hon."""
+        self._write_reports(tmp_path)
+        mock_analyst = MagicMock()
+        long_retry = ("Phân tích chi tiết: thị trường chứng khoán Việt Nam ghi nhận "
+                      "phiên giao dịch tích cực với sự dẫn dắt của nhóm cổ phiếu ngân hàng. "
+                      "VCB tăng mạnh nhất với gần 5%, phản ánh kỳ vọng tích cực về kết quả "
+                      "kinh doanh. Các cổ phiếu khác có sự phân hóa, cần thận trọng khi "
+                      "giải ngân trong ngắn hạn.")
+        mock_analyst.analyze_with_prompt.return_value = long_retry
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis="Ngắn.", ai_analyst=mock_analyst)
+        assert "PHÂN TÍCH AI" in text
+        assert "Phân tích chi tiết" in text
+        assert "chưa đạt" not in text
+        mock_analyst.analyze_with_prompt.assert_called_once()
+
+    def test_ai_short_retry_still_short(self, tmp_path):
+        """Retry van ngan -> bao 'chua dat'."""
+        self._write_reports(tmp_path)
+        mock_analyst = MagicMock()
+        mock_analyst.analyze_with_prompt.return_value = "Vẫn ngắn."
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis="Ngắn.", ai_analyst=mock_analyst)
+        assert "chưa đạt (quá ngắn)" in text
+
+    def test_disclaimer(self, tmp_path):
+        """Disclaimer + nguon + thoi diem."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        assert "KHÔNG phải khuyến nghị đầu tư" in text
+        assert "vietstock" in text
+        assert "Thời điểm lấy dữ liệu" in text
+
+    def test_no_pipeline_sections(self, tmp_path):
+        """Khong con muc pipeline cu."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        for old in ["KẾT NỐI", "DISCOVERY", "API PROFILES", "CAPABILITY",
+                    "GHI CHÚ", "PIPELINE", "endpoint", "profiles", "capability"]:
+            assert old not in text
+
+    def test_no_prices(self, tmp_path):
+        """Khong co gia -> bao khong co du lieu."""
         self._write_reports(tmp_path)
         text = build_summary(str(tmp_path))
-        assert "BÁO CÁO STOCK SCANNER" in text
-        assert "Asia/Bangkok" in text
-        # generated_at 10:00 -> hien thi truc tiep 10:00 (khong cong +7)
-        assert "10:00" in text
-        assert "17:00" not in text
+        assert "Không có dữ liệu giá" in text
 
-    def test_connectivity_section(self, tmp_path):
-        """KET NOI: tung nguon + ssl + thoi gian."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "KẾT NỐI" in text
-        assert "HOSE" in text
-        assert "HNX" in text
-        assert "SSL OK" in text
-        assert "SSL fallback" in text
-        assert "2/2 nguồn OK" in text
-
-    def test_connectivity_error_source(self, tmp_path):
-        """Nguon loi -> ghi ro loi."""
-        final = {
-            "generated_at": "2026-08-02T10:00:00.000000",
-            "pipeline": {"steps": {}},
-            "connectivity": {
-                "total_sources": 1, "reachable": 0, "unreachable": 1,
-                "results": {
-                    "hose": {"name": "HOSE", "url": "https://www.hsx.vn/",
-                             "reachable": False, "http_status": None,
-                             "response_time_ms": None, "ssl_ok": False,
-                             "error": "Connection timed out"},
-                },
-            },
-            "discovery": {},
-        }
-        self._write_reports(tmp_path, final=final)
-        text = build_summary(str(tmp_path))
-        assert "LỖI" in text
-        assert "Connection timed out" in text
-        assert "0/1 nguồn OK" in text
-
-    def test_discovery_section(self, tmp_path):
-        """DISCOVERY: probe found + tong endpoint."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "DISCOVERY" in text
-        assert "found robots" in text
-        assert "Tổng endpoint phát hiện: 4" in text  # 2 api_tests + 1 robots + 1 api_test
-
-    def test_profiles_section(self, tmp_path):
-        """API PROFILES: so profiles + vi du noi bat (u tien method)."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "API PROFILES" in text
-        assert "2 profiles" in text
-        assert "1 profiles" in text
-        # Vi du noi bat: GET /api/v1/stocks co method + auth bearer + csrf
-        assert "GET /api/v1/stocks" in text
-        assert "auth: có (bearer)" in text
-        assert "csrf: có" in text
-
-    def test_capability_section(self, tmp_path):
-        """CAPABILITY: breakdown theo nguon."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "CAPABILITY" in text
-        assert "hose".upper() in text or "HOSE" in text
-        assert "supported=1, unsupported=1, unknown=1" in text
-        assert "unknown=2" in text  # hnx
-
-    def test_notes_section_supported_zero(self, tmp_path):
-        """GHI CHU: supported=0 giai thich."""
-        # Capability toan unknown -> supported=0
-        capability = {
-            "hose": {"stock_list": {"status": "unknown"}},
-        }
-        self._write_reports(tmp_path, capability=capability)
-        text = build_summary(str(tmp_path))
-        assert "GHI CHÚ" in text
-        assert "supported=0" in text
-        assert "unknown" in text
-
-    def test_notes_section_quality_zero(self, tmp_path):
-        """GHI CHU: quality=0 giai thich."""
-        quality = {"hose": {}}
-        self._write_reports(tmp_path, quality=quality)
-        text = build_summary(str(tmp_path))
-        assert "quality" in text.lower()
-
-    def test_pipeline_section(self, tmp_path):
-        """PIPELINE: step ok/failed."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "PIPELINE" in text
-        assert "connectivity: ok" in text
-        assert "Pipeline hoàn tất" in text
-
-    def test_pipeline_failure(self, tmp_path):
-        """Pipeline co loi -> ghi nhan."""
-        self._write_reports(tmp_path, final={
-            "generated_at": "2026-08-02T10:00:00.000000",
-            "pipeline": {"steps": {"connectivity": "ok", "discovery": "failed"}},
-            "connectivity": {},
-            "discovery": {},
-        })
-        text = build_summary(str(tmp_path))
-        assert "discovery: failed" in text
-        assert "Có lỗi step" in text
-
-    def test_missing_files(self, tmp_path):
-        """Thieu file bao cao -> van tao text khong loi."""
-        out = tmp_path / "output"
-        out.mkdir(parents=True)
-        (out / "final_report.json").write_text(
-            json.dumps({"generated_at": "2026-08-02T10:00:00"}), encoding="utf-8"
-        )
-        text = build_summary(str(tmp_path))
-        assert isinstance(text, str)
-        assert len(text) > 0
-
-    def test_length_limit_4000(self, tmp_path):
+    def test_length_limit(self, tmp_path):
         """Text khong vuot 4000 ky tu."""
         self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis="Phân tích dài. " * 100)
         assert len(text) <= 4000
 
     def test_html_escaped(self, tmp_path):
         """Ky tu HTML duoc escape."""
-        final = {
-            "generated_at": "2026-08-02T10:00:00.000000",
-            "pipeline": {"steps": {}},
-            "connectivity": {
-                "total_sources": 1, "reachable": 0, "unreachable": 1,
-                "results": {
-                    "hose": {"name": "HOSE", "url": "https://x.com/?a=1&b=2",
-                             "reachable": False, "http_status": None,
-                             "response_time_ms": None, "ssl_ok": False,
-                             "error": "timeout <5s> & retry"},
-                },
-            },
-            "discovery": {},
-        }
-        self._write_reports(tmp_path, final=final)
-        text = build_summary(str(tmp_path))
+        self._write_reports(tmp_path)
+        prices = make_real_prices()
+        prices["prices"][0]["symbol"] = "A&B"
+        text = build_summary(str(tmp_path), real_prices=prices)
         assert "&amp;" in text
-        assert "&lt;5s&gt;" in text
-        # Khong co raw HTML khong escape
-        assert "<5s>" not in text
-
-    def test_real_data_section(self, tmp_path):
-        """DU LIEU THAT: tung ma gia, %, KL."""
-        self._write_reports(tmp_path)
-        real_prices = {
-            "prices": [
-                {"symbol": "ACB", "price": "21,900", "change_percent": "(-2.01%)",
-                 "volume": "15,165,000", "trading_date": "31/07/2026"},
-                {"symbol": "FPT", "price": "67,100", "change_percent": "(+0.75%)",
-                 "volume": "6,253,600", "trading_date": "31/07/2026"},
-            ]
-        }
-        text = build_summary(str(tmp_path), real_prices=real_prices)
-        assert "DỮ LIỆU THẬT" in text
-        assert "ACB: 21,900 VND ((-2.01%))" in text
-        assert "KL 15,165,000" in text
-        assert "FPT: 67,100 VND" in text
-
-    def test_ai_section(self, tmp_path):
-        """PHAN TICH AI hien thi khi co."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path), ai_analysis="Thị trường có xu hướng giảm nhẹ.\nACB giảm 2%.")
-        assert "PHÂN TÍCH AI" in text
-        assert "Thị trường có xu hướng giảm nhẹ" in text
-
-    def test_no_ai_section_without_data(self, tmp_path):
-        """Khong co AI text -> khong hien thi section."""
-        self._write_reports(tmp_path)
-        text = build_summary(str(tmp_path))
-        assert "PHÂN TÍCH AI" not in text
-        assert "DỮ LIỆU THẬT" not in text
-
-    def test_length_with_real_data(self, tmp_path):
-        """Co du lieu that + AI van <= 4000."""
-        self._write_reports(tmp_path)
-        real_prices = {"prices": [
-            {"symbol": s, "price": "21,900", "change_percent": "(-2.01%)",
-             "volume": "15,165,000", "trading_date": "31/07/2026"}
-            for s in ["ACB", "VCB", "BID", "FPT", "HPG", "VNM", "VIC", "VHM", "GAS", "VPB"]
-        ]}
-        text = build_summary(str(tmp_path), real_prices=real_prices,
-                             ai_analysis="Phân tích dài. " * 50)
-        assert len(text) <= 4000
 
 
 class TestGetTelegramConfig:

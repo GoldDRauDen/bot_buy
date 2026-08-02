@@ -1,6 +1,6 @@
 """
-Telegram Report Sender - Gui bao cao pipeline qua Telegram bot.
-Task: Gui tom tat day du tieng Viet (co dau, HTML-escape, max 4000 ky tu).
+Telegram Report Sender - Gui bao cao chung khoan cho nha dau tu.
+Format: BÁO CÁO CHỨNG KHOÁN, tieng Viet co dau, HTML-escape, max 4000 ky tu.
 
 Security:
 - Token bot la SECRET - chi doc tu env var TELEGRAM_BOT_TOKEN (hoac settings).
@@ -10,10 +10,11 @@ Security:
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -25,6 +26,7 @@ except ImportError:
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_TEXT_LENGTH = 4000
+VIETSTOCK_URL = "https://finance.vietstock.vn/{symbol}/thong-ke-giao-dich.htm"
 
 
 def _read_json(path: Path) -> Optional[Any]:
@@ -48,7 +50,7 @@ def _html_escape(text: Any) -> str:
 def _format_time(generated_at: Any = None) -> str:
     """
     Format thoi gian truc tiep tu generated_at (da la gio dia phuong cua may,
-    khong chuyen doi timezone - khong cong/bot gio).
+    gio Viet Nam = UTC+7, khong chuyen doi - khong cong/bot gio).
     """
     if isinstance(generated_at, str):
         try:
@@ -59,281 +61,174 @@ def _format_time(generated_at: Any = None) -> str:
     return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
-def _count_capabilities(capability_report: Dict) -> Dict[str, Dict[str, int]]:
-    """Dem capability supported/unsupported/unknown theo tung nguon."""
-    result = {}
-    if not isinstance(capability_report, dict):
-        return result
-    for src_key, caps in capability_report.items():
-        if src_key == "generated_at" or not isinstance(caps, dict):
-            continue
-        counts = {"supported": 0, "unsupported": 0, "unknown": 0}
-        for cap_name, cap_data in caps.items():
-            if not isinstance(cap_data, dict):
-                continue
-            status = cap_data.get("status", "unknown")
-            if status in counts:
-                counts[status] += 1
-        result[src_key] = counts
-    return result
+def _num(value: Any) -> float:
+    """Chuyen chuoi so Viet Nam (co dau phay) thanh float. Tra 0.0 neu loi."""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).replace(",", "").replace(".", "").replace("%", "").strip()
+    s = re.sub(r"[^\d\-+.]", "", s)
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
 
-def _count_quality(quality_report: Dict) -> Dict[str, int]:
-    """Dem quality pass/fail."""
-    counts = {"pass": 0, "fail": 0}
-    if not isinstance(quality_report, dict):
-        return counts
-    for src_key, caps in quality_report.items():
-        if src_key == "generated_at" or not isinstance(caps, dict):
-            continue
-        for cap_name, cap_data in caps.items():
-            if not isinstance(cap_data, dict):
-                continue
-            quality = cap_data.get("quality")
-            if quality in counts:
-                counts[quality] += 1
-    return counts
+def _pct_value(pct_str: Any) -> float:
+    """Lay gia tri % tu chuoi nhu '(-2.01%)' hoac '-2.01%'. Tra 0.0 neu loi."""
+    if pct_str is None:
+        return 0.0
+    s = str(pct_str)
+    m = re.search(r"([+-]?\d+(?:\.\d+)?)", s)
+    if m:
+        return float(m.group(1))
+    return 0.0
 
 
-def _count_endpoints(discovery_report: Dict) -> int:
-    """Dem so endpoint phat hien (api_tests + cac endpoint khac)."""
-    total = 0
-    if not isinstance(discovery_report, dict):
-        return 0
-    for src_key, src_data in discovery_report.items():
-        if src_key == "generated_at" or not isinstance(src_data, dict):
-            continue
-        for ep_name, ep_value in src_data.items():
-            if ep_name == "api_tests" and isinstance(ep_value, list):
-                total += len(ep_value)
-            elif isinstance(ep_value, dict):
-                total += 1
-    return total
-
-
-def _pick_profiles(profiles: Dict) -> Dict[str, Dict]:
+def _pct_display(pct_str: Any) -> str:
     """
-    Chon profile noi bat moi nguon: uu tien co method != null va evidence_refs.
-    Tra ve {source_key: profile}.
+    Format % hien thi: luon 1 cap ngoac '(-2.01%)'.
+    Strip ngoac san co tu nguon (tranh ((-2.01%))).
     """
-    result = {}
-    if not isinstance(profiles, dict):
-        return result
-    sources = profiles.get("sources") or {}
-    for src_key, src_data in sources.items():
-        if not isinstance(src_data, dict):
-            continue
-        items = src_data.get("profiles") or []
-        # Uu tien: method != null va co evidence_refs
-        def sort_key(p):
-            return (
-                1 if isinstance(p, dict) and p.get("method") else 0,
-                1 if isinstance(p, dict) and p.get("evidence_refs") else 0,
+    if pct_str is None:
+        return ""
+    s = str(pct_str).strip()
+    s = s.strip("()")
+    if s:
+        return f"({s})"
+    return ""
+
+
+def _summarize_ai(text: str, ai_analyst=None, prices_report: Dict = None) -> Optional[str]:
+    """
+    Chi giu AI text neu >= 120 ky tu. Neu ngan, thu lai 1 lan voi prompt
+    'phan tich chi tiet hon, it nhat 3 cau'. Van ngan -> tra None.
+    """
+    if not text:
+        return None
+    if len(text) >= 120:
+        return text
+    # Thu lai 1 lan voi prompt chi tiet hon
+    try:
+        if ai_analyst is not None and prices_report:
+            retry = ai_analyst.analyze_with_prompt(
+                "Phân tích chi tiết hơn, ít nhất 3 câu, dựa trên dữ liệu đã cung cấp.",
+                prices_report,
             )
-        best = sorted(items, key=sort_key, reverse=True)[:3]
-        if best:
-            result[src_key] = best
-    return result
+            if retry and len(retry) >= 120:
+                return retry
+    except Exception:
+        pass
+    return None
 
 
 def build_summary(base_dir: str = None, config: Dict = None,
-                  real_prices: Dict = None, ai_analysis: str = None) -> str:
+                  real_prices: Dict = None, ai_analysis: str = None,
+                  ai_analyst=None) -> str:
     """
-    Tao bao cao day du tieng Viet co dau, HTML-escape, max 4000 ky tu.
+    Tao bao cao chung khoan cho nha dau tu (tieng Viet co dau, HTML-escape,
+    max 4000 ky tu).
 
     Cau truc:
-    1. Header: BÁO CÁO STOCK SCANNER + thoi gian Asia/Bangkok
-    2. KẾT NỐI: tung nguon (ten, url, http_status, response_time_ms, ssl_ok)
-    3. DISCOVERY: probe found/khong tung nguon + tong endpoint
-    4. API PROFILES: so profiles tung nguon + 3 vi du noi bat
-    5. CAPABILITY: breakdown supported/unsupported/unknown tung nguon
-    6. GHI CHÚ: giai thich supported=0 / quality=0 (trang thai that, khong phai loi)
-    7. PIPELINE: step ok/failed
-    8. DU LIEU THẬT: tung ma (gia, %, khoi luong) tu real_prices (neu co)
-    9. PHÂN TÍCH AI: phan tich Gemini (neu co)
+    1. Header: BÁO CÁO CHỨNG KHOÁN + gio Viet Nam (UTC+7) + ngay phien
+    2. THỊ TRƯỜNG: so ma tang/giam/dung gia, tong KL (VN-INDEX neu lay duoc,
+       khong lay duoc thi bo qua phan index, khong bia)
+    3. WATCHLIST: moi ma 1 dong gon
+    4. ĐIỂM NHẤN: top tang + top giam
+    5. PHÂN TÍCH AI: chi hien thi neu text >= 120 ky tu
+    6. Disclaimer + nguon + thoi diem lay du lieu
     """
     if base_dir is None:
         base_dir = str(Path(__file__).parent.parent.parent)
     output_dir = Path(base_dir) / "output"
 
     final = _read_json(output_dir / "final_report.json") or {}
-    capability = _read_json(output_dir / "capability_report.json") or {}
-    discovery = _read_json(output_dir / "discovery_report.json") or {}
-    profiles = _read_json(output_dir / "endpoint_profiles.json") or {}
     quality = _read_json(output_dir / "quality_report.json") or {}
 
     generated_at = final.get("generated_at") or quality.get("generated_at") or datetime.now().isoformat()
     time_str = _format_time(generated_at)
 
+    prices = (real_prices or {}).get("prices") or []
     lines = []
+
     # ---------- 1. HEADER ----------
-    lines.append("📊 <b>BÁO CÁO STOCK SCANNER</b>")
-    lines.append(f"🕐 Thời gian (Asia/Bangkok): {_html_escape(time_str)}")
+    lines.append("📊 <b>BÁO CÁO CHỨNG KHOÁN</b>")
+    lines.append(f"🕐 {_html_escape(time_str)} (giờ Việt Nam, UTC+7)")
+    if prices and prices[0].get("trading_date"):
+        lines.append(f"📅 Dữ liệu phiên: {_html_escape(prices[0]['trading_date'])}")
     lines.append("")
 
-    # ---------- 2. KẾT NỐI ----------
-    lines.append("🔌 <b>KẾT NỐI</b>")
-    connectivity = final.get("connectivity") or {}
-    results = connectivity.get("results") if isinstance(connectivity, dict) else None
-    if isinstance(results, dict) and results:
-        for src_key, src_data in results.items():
-            if not isinstance(src_data, dict):
-                continue
-            name = _html_escape(src_data.get("name") or src_key.upper())
-            url = _html_escape(src_data.get("url") or "")
-            reachable = src_data.get("reachable")
-            status = src_data.get("http_status")
-            rt = src_data.get("response_time_ms")
-            ssl = src_data.get("ssl_ok")
-            if reachable:
-                ssl_txt = "SSL OK" if ssl else "SSL fallback"
-                lines.append(
-                    f"✅ {name}: HTTP {status} ({rt:.0f}ms, {ssl_txt})"
-                    if isinstance(rt, (int, float))
-                    else f"✅ {name}: HTTP {status} ({ssl_txt})"
-                )
-            else:
-                err = _html_escape(src_data.get("error") or "không xác định")
-                lines.append(f"❌ {name}: LỖI — {err[:100]}")
-                lines.append(f"   {url}")
-        reachable = connectivity.get("reachable")
-        total = connectivity.get("total_sources")
-        if isinstance(reachable, int) and isinstance(total, int):
-            lines.append(f"→ {reachable}/{total} nguồn OK")
+    # ---------- 2. THỊ TRƯỜNG ----------
+    lines.append("🏛 <b>THỊ TRƯỜNG</b>")
+    if prices:
+        up = sum(1 for p in prices if _pct_value(p.get("change_percent")) > 0)
+        down = sum(1 for p in prices if _pct_value(p.get("change_percent")) < 0)
+        flat = len(prices) - up - down
+        total_vol = sum(_num(p.get("volume")) for p in prices)
+        lines.append(f"📈 Tăng: {up} | 📉 Giảm: {down} | ➖ Đứng giá: {flat}")
+        lines.append(f"🔢 Tổng khối lượng (watchlist {len(prices)} mã): {total_vol:,.0f}")
     else:
-        lines.append("⚠️ Không có dữ liệu kết nối")
+        lines.append("⚠️ Không có dữ liệu giá")
     lines.append("")
 
-    # ---------- 3. DISCOVERY ----------
-    lines.append("🔍 <b>DISCOVERY</b>")
-    disc = final.get("discovery") if isinstance(final.get("discovery"), dict) else {}
-    probes = ["robots", "sitemap", "rss", "graphql", "swagger"]
-    for src_key, src_data in disc.items():
-        if src_key == "generated_at" or not isinstance(src_data, dict):
-            continue
-        name = _html_escape(src_key.upper())
-        found_parts = []
-        missing_parts = []
-        for probe in probes:
-            ep = src_data.get(probe)
-            if isinstance(ep, dict):
-                if ep.get("found"):
-                    found_parts.append(probe)
-                else:
-                    missing_parts.append(probe)
-        if found_parts:
-            lines.append(f"✅ {name}: found {', '.join(found_parts)}")
-        else:
-            lines.append(f"✅ {name}: kết nối OK, chưa tìm thấy probe tiêu chuẩn")
-        if missing_parts:
-            lines.append(f"   Không tìm thấy: {', '.join(missing_parts)}")
-    endpoint_total = _count_endpoints(discovery)
-    lines.append(f"→ Tổng endpoint phát hiện: {endpoint_total}")
-    lines.append("")
-
-    # ---------- 4. API PROFILES ----------
-    lines.append("🧩 <b>API PROFILES</b>")
-    profiles_sources = (profiles.get("sources") or {}) if isinstance(profiles, dict) else {}
-    if profiles_sources:
-        for src_key, src_data in profiles_sources.items():
-            if not isinstance(src_data, dict):
-                continue
-            items = src_data.get("profiles") or []
-            name = _html_escape(src_key.upper())
-            lines.append(f"📌 {name}: {len(items)} profiles")
-            # 3 vi du noi bat
-            best = _pick_profiles(profiles).get(src_key, [])[:3]
-            for p in best:
-                method = _html_escape(p.get("method") or "?")
-                url = _html_escape(p.get("url") or "")
-                auth = p.get("authentication") or {}
-                auth_required = "có" if auth.get("required") else "không"
-                auth_type = _html_escape(auth.get("type")) if auth.get("type") else ""
-                csrf = "có" if p.get("csrf_required") else "không"
-                auth_txt = f", auth: {auth_required}"
-                if auth_type:
-                    auth_txt += f" ({auth_type})"
-                lines.append(f"   • {method} {url[:60]} — csrf: {csrf}{auth_txt}")
-    else:
-        lines.append("⚠️ Chưa có endpoint profiles")
-    lines.append("")
-
-    # ---------- 5. CAPABILITY ----------
-    lines.append("🎯 <b>CAPABILITY</b>")
-    cap_by_source = _count_capabilities(capability)
-    if cap_by_source:
-        for src_key, counts in cap_by_source.items():
-            name = _html_escape(src_key.upper())
-            lines.append(
-                f"📌 {name}: supported={counts['supported']}, "
-                f"unsupported={counts['unsupported']}, unknown={counts['unknown']}"
-            )
-    else:
-        lines.append("⚠️ Không có dữ liệu capability")
-    lines.append("")
-
-    # ---------- 6. GHI CHÚ ----------
-    lines.append("📝 <b>GHI CHÚ</b>")
-    cap_counts_total = {"supported": 0, "unsupported": 0, "unknown": 0}
-    for counts in cap_by_source.values():
-        for k in cap_counts_total:
-            cap_counts_total[k] += counts[k]
-    quality_counts = _count_quality(quality)
-    if cap_counts_total["supported"] == 0:
-        lines.append(
-            "• Capability supported=0: phân loại offline theo keyword "
-            "(không AI, không đoán), hầu hết endpoint chưa đủ bằng chứng nội dung "
-            "nên xếp <b>unknown</b> — đây là trạng thái thật, không phải lỗi."
-        )
-    if quality_counts["pass"] == 0 and quality_counts["fail"] == 0:
-        lines.append(
-            "• Quality pass=0: endpoint_plan trống (chưa có capability supported) "
-            "nên chưa fetch dữ liệu thật — pipeline dừng đúng theo thiết kế."
-        )
-    elif quality_counts["pass"] == 0:
-        lines.append(
-            "• Quality pass=0: dữ liệu fetch về chưa đạt tiêu chuẩn chất lượng "
-            "(empty/không phải JSON hợp lệ) — kiểm tra raw_data."
-        )
-    lines.append("")
-
-    # ---------- 7. PIPELINE ----------
-    lines.append("⚙️ <b>PIPELINE</b>")
-    pipeline = final.get("pipeline") or {}
-    steps = (pipeline.get("steps") or {}) if isinstance(pipeline, dict) else {}
-    if steps:
-        failed = [name for name, status in steps.items() if status != "ok"]
-        for name, status in steps.items():
-            mark = "✅" if status == "ok" else "❌"
-            lines.append(f"{mark} {_html_escape(name)}: {_html_escape(status)}")
-        if failed:
-            lines.append(f"⚠️ Có lỗi step: {', '.join(failed)}")
-        else:
-            lines.append("✅ Pipeline hoàn tất, không lỗi")
-    else:
-        lines.append("⚠️ Không có dữ liệu pipeline")
-
-    # ---------- 8. DU LIEU THẬT ----------
-    if real_prices and real_prices.get("prices"):
-        lines.append("")
-        lines.append("💹 <b>DỮ LIỆU THẬT</b> (vietstock)")
-        for p in real_prices["prices"]:
+    # ---------- 3. WATCHLIST ----------
+    lines.append("📋 <b>WATCHLIST</b>")
+    if prices:
+        for p in prices:
             symbol = _html_escape(p.get("symbol", "?"))
             price = _html_escape(p.get("price", "?"))
-            pct = _html_escape(p.get("change_percent", ""))
+            pct = _html_escape(_pct_display(p.get("change_percent")))
             vol = _html_escape(p.get("volume", ""))
-            date = _html_escape(p.get("trading_date", ""))
-            lines.append(f"📌 {symbol}: {price} VND ({pct}) — KL {vol} ({date})")
+            lines.append(f"📌 {symbol}: {price} VND {pct} | KL {vol}")
+    else:
+        lines.append("⚠️ Chưa có dữ liệu giá thật")
+    lines.append("")
 
-    # ---------- 9. PHÂN TÍCH AI ----------
-    if ai_analysis:
+    # ---------- 4. ĐIỂM NHẤN ----------
+    if prices:
+        lines.append("⭐ <b>ĐIỂM NHẤN</b>")
+        with_pct = [(p, _pct_value(p.get("change_percent"))) for p in prices]
+        valid = [x for x in with_pct if x[1] != 0.0]
+        if valid:
+            top_up = max(valid, key=lambda x: x[1])
+            top_down = min(valid, key=lambda x: x[1])
+            lines.append(
+                f"🚀 Tăng mạnh nhất: {_html_escape(top_up[0].get('symbol', '?'))} "
+                f"{_html_escape(_pct_display(top_up[0].get('change_percent')))}"
+            )
+            lines.append(
+                f"🔻 Giảm mạnh nhất: {_html_escape(top_down[0].get('symbol', '?'))} "
+                f"{_html_escape(_pct_display(top_down[0].get('change_percent')))}"
+            )
+        else:
+            lines.append("➖ Không có mã tăng/giảm đáng kể")
         lines.append("")
+
+    # ---------- 5. PHÂN TÍCH AI ----------
+    ai_text = _summarize_ai(ai_analysis, ai_analyst=ai_analyst,
+                            prices_report=real_prices) if ai_analysis else None
+    if ai_text:
         lines.append("🤖 <b>PHÂN TÍCH AI</b>")
-        # Cat AI text thanh cac dong ngan, escape
-        ai_text = _html_escape(ai_analysis)
-        for para in ai_text.split("\n"):
+        for para in _html_escape(ai_text).split("\n"):
             if para.strip():
-                lines.append(para.strip()[:200])
+                lines.append(para.strip()[:300])
+        lines.append("")
+    elif ai_analysis is not None:
+        # Co AI text nhung qua ngan va khong the lam dai hon
+        lines.append("🤖 <b>PHÂN TÍCH AI</b>")
+        lines.append("⚠️ AI phân tích chưa đạt (quá ngắn)")
+        lines.append("")
+
+    # ---------- 6. DISCLAIMER ----------
+    lines.append("—" * 20)
+    lines.append(
+        "⚠️ Báo cáo tự động từ dữ liệu thật (vietstock), chỉ mang tính tham khảo, "
+        "KHÔNG phải khuyến nghị đầu tư."
+    )
+    if prices and prices[0].get("source_url"):
+        lines.append(f"🔗 Nguồn: {_html_escape(prices[0]['source_url'])}")
+    lines.append(f"⏱ Thời điểm lấy dữ liệu: {_html_escape(time_str)}")
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT_LENGTH:

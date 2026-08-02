@@ -27,7 +27,8 @@ DEFAULT_MODEL = "gemini-2.0-flash"
 FALLBACK_MODEL = "gemini-flash-latest"
 
 
-def build_prompt(prices_report: Dict[str, Any]) -> str:
+def build_prompt(prices_report: Dict[str, Any],
+                 extra_instruction: str = "") -> str:
     """
     Tao prompt phan tich tu prices.json.
     Chi dung so lieu co trong report.
@@ -59,6 +60,9 @@ def build_prompt(prices_report: Dict[str, Any]) -> str:
         "CHỈ dùng số liệu được cung cấp ở trên, KHÔNG thêm số liệu khác. "
         "Nếu thiếu dữ liệu, hãy nói rõ."
     )
+    if extra_instruction:
+        lines.append("")
+        lines.append(extra_instruction)
     return "\n".join(lines)
 
 
@@ -128,6 +132,58 @@ class AiAnalyst:
             except requests.RequestException as e:
                 self.logger.warning(f"Gemini {model} loi: {e}")
             # Loi (404/429/5xx/timeout/rong) -> thu model tiep theo
+        return None
+
+    def analyze_with_prompt(self, extra_instruction: str,
+                            prices_report: Dict[str, Any],
+                            api_key: str = None) -> Optional[str]:
+        """
+        Goi Gemini lai voi instruction bo sung (vi du: yeu cau chi tiet hon).
+        Dung build_prompt voi extra_instruction. Tra None neu loi.
+        """
+        if api_key is None:
+            api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        prompt = build_prompt(prices_report, extra_instruction=extra_instruction)
+        if not prompt:
+            return None
+
+        models_to_try = [self.model]
+        if FALLBACK_MODEL != self.model:
+            models_to_try.append(FALLBACK_MODEL)
+
+        for model in models_to_try:
+            try:
+                url = GEMINI_URL.format(model=model)
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.3,
+                        "maxOutputTokens": 800,
+                    },
+                }
+                resp = requests.post(
+                    url, params={"key": api_key}, json=payload,
+                    timeout=self.timeout,
+                    headers={"Content-Type": "application/json"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = (data.get("candidates") or [{}])[0] \
+                        .get("content", {}).get("parts", [{}])[0].get("text", "")
+                    if text:
+                        self.logger.info(
+                            f"Gemini {model} (retry) phan tich OK ({len(text)} chars)"
+                        )
+                        return text
+                    self.logger.warning(f"Gemini {model} (retry): response rong")
+                else:
+                    self.logger.warning(
+                        f"Gemini {model} (retry) -> {resp.status_code}: {resp.text[:200]}"
+                    )
+            except requests.RequestException as e:
+                self.logger.warning(f"Gemini {model} (retry) loi: {e}")
         return None
 
 

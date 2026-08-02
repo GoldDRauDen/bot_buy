@@ -58,7 +58,10 @@ def main() -> int:
 
     # Build summary (gom du lieu that + AI)
     print("\n  [3/3] Build summary + gui...")
-    text = build_summary(real_prices=prices_report, ai_analysis=analysis)
+    from analyst.ai_analyst import AiAnalyst
+    analyst = AiAnalyst(logger=logger)
+    text = build_summary(real_prices=prices_report, ai_analysis=analysis,
+                         ai_analyst=analyst)
     print(f"\n  Tom tat bao cao ({len(text)} ky tu):")
     for line in text.splitlines():
         print(f"    {line}")
