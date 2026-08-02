@@ -155,6 +155,61 @@ class AiAnalyst:
         self.timeout = int(self.config.get("timeout", 30))
         self.last_model = None  # Model thuc su thanh cong o lan goi gan nhat
 
+    def _post_generate(self, model: str, api_key: str, prompt: str):
+        """
+        Goi Gemini generateContent.
+        - Payload: maxOutputTokens 8192, thinkingConfig {'thinkingBudget': 0}
+          (tat suy nghi - gemini-flash-latest tieu thu token budget cho thinking).
+        - An toan: neu 400/error voi thinkingConfig -> thu lai KHONG co
+          thinkingConfig (van giu maxOutputTokens 8192).
+        Tra ve (data, status_code) hoac (None, status).
+        """
+        url = GEMINI_URL.format(model=model)
+        base_config = {
+            "temperature": 0.4,
+            "maxOutputTokens": 8192,
+            "candidateCount": 1,
+        }
+
+        # Lan 1: co thinkingConfig
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": dict(base_config, thinkingConfig={"thinkingBudget": 0}),
+        }
+        try:
+            resp = requests.post(
+                url, params={"key": api_key}, json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                return resp.json(), 200
+            if resp.status_code != 400:
+                # Loi khac 400 (404/429/5xx...) khong phai do thinkingConfig
+                return None, resp.status_code
+            self.logger.warning(
+                f"Gemini {model}: 400 voi thinkingConfig - thu lai khong thinkingConfig"
+            )
+        except requests.RequestException as e:
+            self.logger.warning(f"Gemini {model} loi: {e}")
+            return None, 0
+
+        # Lan 2: khong thinkingConfig (400 do model khong ho tro)
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": base_config,
+        }
+        try:
+            resp = requests.post(
+                url, params={"key": api_key}, json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            return resp.json(), resp.status_code
+        except requests.RequestException as e:
+            self.logger.warning(f"Gemini {model} loi: {e}")
+            return None, 0
+
     def analyze(self, prices_report: Dict[str, Any],
                 api_key: str = None) -> Optional[str]:
         """
@@ -180,22 +235,8 @@ class AiAnalyst:
         for attempt in range(2):
             for model in models_to_try:
                 try:
-                    url = GEMINI_URL.format(model=model)
-                    payload = {
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {
-                            "temperature": 0.4,
-                            "maxOutputTokens": 1200,
-                            "candidateCount": 1,
-                        },
-                    }
-                    resp = requests.post(
-                        url, params={"key": api_key}, json=payload,
-                        timeout=self.timeout,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
+                    data, status = self._post_generate(model, api_key, prompt)
+                    if status == 200:
                         candidate = (data.get("candidates") or [{}])[0]
                         parts = candidate.get("content", {}).get("parts", [])
                         finish = candidate.get("finishReason")
@@ -229,10 +270,8 @@ class AiAnalyst:
                         else:
                             self.logger.warning(f"Gemini {model}: response rong")
                     else:
-                        self.logger.warning(
-                            f"Gemini {model} -> {resp.status_code}: {resp.text[:200]}"
-                        )
-                except requests.RequestException as e:
+                        self.logger.warning(f"Gemini {model} -> {status}")
+                except Exception as e:
                     self.logger.warning(f"Gemini {model} loi: {e}")
                 # Loi (404/429/5xx/timeout/rong) -> thu model tiep theo
             # Het models -> retry 1 lan voi prompt co them yeu cau sach
@@ -267,22 +306,8 @@ class AiAnalyst:
 
         for model in models_to_try:
             try:
-                url = GEMINI_URL.format(model=model)
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.4,
-                        "maxOutputTokens": 1200,
-                        "candidateCount": 1,
-                    },
-                }
-                resp = requests.post(
-                    url, params={"key": api_key}, json=payload,
-                    timeout=self.timeout,
-                    headers={"Content-Type": "application/json"},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
+                data, status = self._post_generate(model, api_key, prompt)
+                if status == 200:
                     candidate = (data.get("candidates") or [{}])[0]
                     parts = candidate.get("content", {}).get("parts", [])
                     finish = candidate.get("finishReason")
@@ -303,10 +328,8 @@ class AiAnalyst:
                         return text
                     self.logger.warning(f"Gemini {model} (retry): response rong")
                 else:
-                    self.logger.warning(
-                        f"Gemini {model} (retry) -> {resp.status_code}: {resp.text[:200]}"
-                    )
-            except requests.RequestException as e:
+                    self.logger.warning(f"Gemini {model} (retry) -> {status}")
+            except Exception as e:
                 self.logger.warning(f"Gemini {model} (retry) loi: {e}")
         return None
 

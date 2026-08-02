@@ -164,9 +164,10 @@ class TestAiAnalyst:
         assert "ACB" in payload["contents"][0]["parts"][0]["text"]
         # generationConfig moi
         gen = payload["generationConfig"]
-        assert gen["maxOutputTokens"] == 1200
+        assert gen["maxOutputTokens"] == 8192
         assert gen["temperature"] == 0.4
         assert gen["candidateCount"] == 1
+        assert gen["thinkingConfig"] == {"thinkingBudget": 0}
 
     def test_missing_key(self):
         analyst = AiAnalyst(config={})
@@ -442,3 +443,37 @@ class TestAiAnalyst:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         assert result == LONG_TEXT
         assert mock_post.call_count == 1
+
+    def test_thinking_config_400_fallback(self):
+        """400 voi thinkingConfig -> thu lai khong thinkingConfig."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_400 = MagicMock(status_code=400, text="thinkingConfig not supported")
+        mock_ok = MagicMock()
+        mock_ok.status_code = 200
+        mock_ok.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": LONG_TEXT}]},
+                            "finishReason": "STOP"}]
+        }
+        with patch("analyst.ai_analyst.requests.post",
+                   side_effect=[mock_400, mock_ok]) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result == LONG_TEXT
+        assert mock_post.call_count == 2
+        # Lan 1: co thinkingConfig; Lan 2: khong
+        gen1 = mock_post.call_args_list[0].kwargs["json"]["generationConfig"]
+        gen2 = mock_post.call_args_list[1].kwargs["json"]["generationConfig"]
+        assert gen1.get("thinkingConfig") == {"thinkingBudget": 0}
+        assert "thinkingConfig" not in gen2
+        assert gen1["maxOutputTokens"] == 8192
+        assert gen2["maxOutputTokens"] == 8192
+
+    def test_thinking_config_400_all_models(self):
+        """400 ca 2 lan (co + khong thinkingConfig) -> None."""
+        analyst = AiAnalyst(config={"model": "gemini-flash-latest"})
+        mock_400 = MagicMock(status_code=400, text="bad request")
+        with patch("analyst.ai_analyst.requests.post",
+                   return_value=mock_400) as mock_post:
+            result = analyst.analyze(SAMPLE_PRICES, api_key="k")
+        assert result is None
+        # 1 model x 2 attempts x 2 lan (with/without thinkingConfig)
+        assert mock_post.call_count == 4
