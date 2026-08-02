@@ -23,7 +23,8 @@ except ImportError:
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "{model}:generateContent")
 DEFAULT_MODEL = "gemini-2.0-flash"
-FALLBACK_MODEL = "gemini-2.5-flash"
+# Model da chay thanh cong thuc te o du an khac
+FALLBACK_MODEL = "gemini-flash-latest"
 
 
 def build_prompt(prices_report: Dict[str, Any]) -> str:
@@ -93,11 +94,11 @@ class AiAnalyst:
             self.logger.warning("SKIP: khong co du lieu gia de phan tich")
             return None
 
-        for model in [self.model, FALLBACK_MODEL]:
-            if model == self.model:
-                pass
-            elif self.model == FALLBACK_MODEL:
-                break  # da thu fallback roi
+        models_to_try = [self.model]
+        if FALLBACK_MODEL != self.model:
+            models_to_try.append(FALLBACK_MODEL)
+
+        for model in models_to_try:
             try:
                 url = GEMINI_URL.format(model=model)
                 payload = {
@@ -124,14 +125,9 @@ class AiAnalyst:
                     self.logger.warning(
                         f"Gemini {model} -> {resp.status_code}: {resp.text[:200]}"
                     )
-                    # 404 model -> thu fallback
-                    if resp.status_code == 404:
-                        continue
-                    return None
             except requests.RequestException as e:
                 self.logger.warning(f"Gemini {model} loi: {e}")
-                if model == FALLBACK_MODEL:
-                    return None
+            # Loi (404/429/5xx/timeout/rong) -> thu model tiep theo
         return None
 
 
