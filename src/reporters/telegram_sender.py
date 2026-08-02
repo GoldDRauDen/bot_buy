@@ -25,8 +25,6 @@ except ImportError:
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_TEXT_LENGTH = 4000
-# Timezone Asia/Bangkok (UTC+7)
-BANGKOK_OFFSET = 7 * 3600
 
 
 def _read_json(path: Path) -> Optional[Any]:
@@ -47,24 +45,18 @@ def _html_escape(text: Any) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _bangkok_time(generated_at: Any = None) -> str:
-    """Chuyen thoi gian sang Asia/Bangkok (UTC+7)."""
+def _format_time(generated_at: Any = None) -> str:
+    """
+    Format thoi gian truc tiep tu generated_at (da la gio dia phuong cua may,
+    khong chuyen doi timezone - khong cong/bot gio).
+    """
     if isinstance(generated_at, str):
         try:
             dt = datetime.fromisoformat(generated_at)
+            return dt.strftime("%d/%m/%Y %H:%M")
         except (ValueError, TypeError):
-            dt = datetime.now()
-    else:
-        dt = datetime.now()
-    # Chuyen sang UTC roi +7 (fromisoformat co the co timezone)
-    if dt.tzinfo is None:
-        dt_utc = dt
-    else:
-        dt_utc = dt.astimezone()
-        dt_utc = dt_utc.replace(tzinfo=None)
-    from datetime import timedelta
-    bangkok = dt_utc + timedelta(seconds=BANGKOK_OFFSET)
-    return bangkok.strftime("%d/%m/%Y %H:%M")
+            pass
+    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
 def _count_capabilities(capability_report: Dict) -> Dict[str, Dict[str, int]]:
@@ -168,7 +160,7 @@ def build_summary(base_dir: str = None, config: Dict = None) -> str:
     quality = _read_json(output_dir / "quality_report.json") or {}
 
     generated_at = final.get("generated_at") or quality.get("generated_at") or datetime.now().isoformat()
-    time_str = _bangkok_time(generated_at)
+    time_str = _format_time(generated_at)
 
     lines = []
     # ---------- 1. HEADER ----------

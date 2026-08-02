@@ -109,13 +109,14 @@ class TestBuildSummary:
             (out / name).write_text(json.dumps(data), encoding="utf-8")
 
     def test_header(self, tmp_path):
-        """Header + thoi gian Asia/Bangkok."""
+        """Header + thoi gian truc tiep (khong chuyen doi timezone)."""
         self._write_reports(tmp_path)
         text = build_summary(str(tmp_path))
         assert "BÁO CÁO STOCK SCANNER" in text
         assert "Asia/Bangkok" in text
-        # 10:00 UTC+0 -> 17:00 Bangkok
-        assert "17:00" in text
+        # generated_at 10:00 -> hien thi truc tiep 10:00 (khong cong +7)
+        assert "10:00" in text
+        assert "17:00" not in text
 
     def test_connectivity_section(self, tmp_path):
         """KET NOI: tung nguon + ssl + thoi gian."""
