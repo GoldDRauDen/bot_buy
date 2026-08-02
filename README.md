@@ -121,6 +121,55 @@ Tất cả báo cáo trong `output/` (JSON, `ensure_ascii=False`):
 | `extracted_data/` | Dữ liệu trích xuất (Task 13) |
 | `logs/app.log` | Log chạy |
 
+## Telegram report
+
+Gửi báo cáo pipeline qua Telegram bot sau mỗi lần chạy.
+
+### 1. Tạo bot (BotFather)
+
+1. Chat với [@BotFather](https://t.me/BotFather) trên Telegram
+2. `/newbot` → đặt tên + username → nhận **token** (dạng `123456:ABC-DEF...`)
+3. Tìm chat_id: gửi tin nhắn cho bot, rồi gọi:
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` → lấy `chat.id`
+   (hoặc dùng bot @userinfobot)
+
+### 2. Cấu hình credentials
+
+**Local** — set env var (không hardcode token trong file):
+```bash
+# Windows PowerShell
+$env:TELEGRAM_BOT_TOKEN = "123456:ABC-DEF..."
+$env:TELEGRAM_CHAT_ID = "123456789"
+
+# Linux/macOS
+export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+export TELEGRAM_CHAT_ID="123456789"
+```
+
+Hoặc điền `chat_id` vào `config/settings.yaml` (token **luôn** từ env var — không commit token).
+
+### 3. Chạy
+
+```bash
+python send_telegram.py
+```
+
+- Thiếu credential → in `SKIP`, exit 0 (không fail CI)
+- Text tóm tắt (~1500 ký tự, tiếng Việt): ngày giờ, số nguồn, endpoint phát hiện, capability supported/unsupported, endpoint profiles, quality pass/fail, lỗi pipeline
+
+### 4. CI (GitHub Actions)
+
+1. Vào repo → **Settings → Secrets and variables → Actions**
+2. Thêm 2 secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+3. Workflow `.github/workflows/scanner.yml` job `scan` tự gửi Telegram sau `python main.py` (tham chiếu `${{ secrets.TELEGRAM_BOT_TOKEN }}` — không hardcode)
+
+### 5. Task Scheduler local (Windows)
+
+1. **Task Scheduler** → Create Task
+2. Trigger: Daily, giờ mong muốn
+3. Action: `python F:\github\bot_buy\stock-scanner\main.py` rồi `python F:\github\bot_buy\stock-scanner\send_telegram.py`
+4. Hoặc tạo batch chạy cả pipeline + gửi báo cáo
+
 ## Log
 
 Log ghi vào: `output/logs/app.log`

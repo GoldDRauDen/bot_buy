@@ -38,3 +38,9 @@ reverser:
   retries: 2
   request_delay: 1.0
   max_probes: 10
+
+telegram:
+  enabled: true
+  # Token doc tu env var TELEGRAM_BOT_TOKEN (uu tien) - KHONG commit token vao day
+  # chat_id doc tu env var TELEGRAM_CHAT_ID (uu tien) hoac cau hinh o day
+  chat_id: ""

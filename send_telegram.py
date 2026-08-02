@@ -1,0 +1,61 @@
+"""
+Gui bao cao pipeline qua Telegram.
+Doc tom tat tu output/, gui qua bot Telegram.
+
+Su dung:
+  python send_telegram.py
+
+Credentials:
+  - env var: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (uu tien)
+  - hoac config/settings.yaml: telegram.token, telegram.chat_id
+Thieu credentials -> in canh bao SKIP, exit 0 (khong fail CI).
+"""
+import logging
+import sys
+from pathlib import Path
+
+# Them src vao sys.path (nhu main.py)
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+# Windows console cp1252 khong in duoc emoji -> force UTF-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
+from reporters.telegram_sender import build_summary, send_telegram
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    logger = logging.getLogger("send_telegram")
+
+    print("=" * 50)
+    print("  Gui bao cao Telegram")
+    print("=" * 50)
+
+    # Build summary
+    text = build_summary()
+    print(f"\n  Tom tat bao cao ({len(text)} ky tu):")
+    for line in text.splitlines():
+        print(f"    {line}")
+
+    # Gui
+    print("\n  Gui qua Telegram...")
+    success = send_telegram(text, logger=logger)
+
+    if success:
+        print("\n  ✅ Da gui bao cao Telegram thanh cong")
+        return 0
+
+    # Thieu credential hoac gui loi -> khong fail CI (theo yeu cau)
+    print("\n  ⚠️ Khong gui duoc (thieu credential hoac loi mang)")
+    print("  SKIP - exit 0 (khong fail CI)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
