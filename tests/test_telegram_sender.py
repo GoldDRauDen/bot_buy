@@ -259,6 +259,49 @@ class TestBuildSummary:
         # Khong co raw HTML khong escape
         assert "<5s>" not in text
 
+    def test_real_data_section(self, tmp_path):
+        """DU LIEU THAT: tung ma gia, %, KL."""
+        self._write_reports(tmp_path)
+        real_prices = {
+            "prices": [
+                {"symbol": "ACB", "price": "21,900", "change_percent": "(-2.01%)",
+                 "volume": "15,165,000", "trading_date": "31/07/2026"},
+                {"symbol": "FPT", "price": "67,100", "change_percent": "(+0.75%)",
+                 "volume": "6,253,600", "trading_date": "31/07/2026"},
+            ]
+        }
+        text = build_summary(str(tmp_path), real_prices=real_prices)
+        assert "DỮ LIỆU THẬT" in text
+        assert "ACB: 21,900 VND ((-2.01%))" in text
+        assert "KL 15,165,000" in text
+        assert "FPT: 67,100 VND" in text
+
+    def test_ai_section(self, tmp_path):
+        """PHAN TICH AI hien thi khi co."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path), ai_analysis="Thị trường có xu hướng giảm nhẹ.\nACB giảm 2%.")
+        assert "PHÂN TÍCH AI" in text
+        assert "Thị trường có xu hướng giảm nhẹ" in text
+
+    def test_no_ai_section_without_data(self, tmp_path):
+        """Khong co AI text -> khong hien thi section."""
+        self._write_reports(tmp_path)
+        text = build_summary(str(tmp_path))
+        assert "PHÂN TÍCH AI" not in text
+        assert "DỮ LIỆU THẬT" not in text
+
+    def test_length_with_real_data(self, tmp_path):
+        """Co du lieu that + AI van <= 4000."""
+        self._write_reports(tmp_path)
+        real_prices = {"prices": [
+            {"symbol": s, "price": "21,900", "change_percent": "(-2.01%)",
+             "volume": "15,165,000", "trading_date": "31/07/2026"}
+            for s in ["ACB", "VCB", "BID", "FPT", "HPG", "VNM", "VIC", "VHM", "GAS", "VPB"]
+        ]}
+        text = build_summary(str(tmp_path), real_prices=real_prices,
+                             ai_analysis="Phân tích dài. " * 50)
+        assert len(text) <= 4000
+
 
 class TestGetTelegramConfig:
     """Test doc cau hinh telegram."""

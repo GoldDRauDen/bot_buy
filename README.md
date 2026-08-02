@@ -170,6 +170,50 @@ python send_telegram.py
 3. Action: `python F:\github\bot_buy\stock-scanner\main.py` rồi `python F:\github\bot_buy\stock-scanner\send_telegram.py`
 4. Hoặc tạo batch chạy cả pipeline + gửi báo cáo
 
+## Dữ liệu thật + AI phân tích (PHA 2)
+
+### Nguồn dữ liệu thật
+
+Sau 25 phút recon (cafef, SSI iboard/fiin, TCBS, VNDirect, Yahoo, FireAnt đều fail/chặn),
+dùng nguồn HTML của **vietstock** — JSON `_stockTrade` nhúng trong trang:
+
+```
+https://finance.vietstock.vn/{SYMBOL}/thong-ke-giao-dich.htm
+```
+
+Dữ liệu thật xác nhận: ACB 21,900 (-2.01%), FPT 67,100 (+0.15%), VCB 59,300 (+4.96%),
+KL, giá mở/cao/thấp, ngày giao dịch. Không bịa số liệu — chỉ parse từ HTML thật.
+
+### Fetch giá thật
+
+```bash
+python -c "from fetcher.real_data_fetcher import run_real_data_fetch; run_real_data_fetch()"
+# Hoac chay qua send_telegram.py (tu dong fetch truoc khi gui)
+python send_telegram.py
+```
+
+- Watchlist mặc định: ACB, VCB, BID, FPT, HPG, VNM, VIC, VHM, GAS, VPB (sửa trong `config/settings.yaml` → `ai.watchlist`)
+- Output: `output/real_data/prices.json` (giá, % thay đổi, khối lượng, ngày giao dịch, nguồn URL)
+
+### AI phân tích (Gemini)
+
+```bash
+# Local: set env var (không commit key)
+$env:GEMINI_API_KEY = "AIza..."
+python send_telegram.py
+```
+
+- Gọi `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+- Model mặc định `gemini-2.0-flash`, fallback `gemini-2.5-flash` nếu 404 (cấu hình `ai.model`)
+- Prompt: phân tích DUNG số liệu được cung cấp, không thêm số liệu khác, tiếng Việt ngắn gọn
+- Thiếu key / lỗi API → trả None, báo rõ trong log, **không bịa** phân tích
+- Output: `output/real_data/ai_analysis.json`
+
+### CI
+
+Thêm GitHub secret `GEMINI_API_KEY` (Settings → Secrets → Actions). Workflow `scanner.yml`
+tự fetch + gửi Telegram với `${{ secrets.GEMINI_API_KEY }}`.
+
 ## Log
 
 Log ghi vào: `output/logs/app.log`

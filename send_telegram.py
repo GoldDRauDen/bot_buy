@@ -24,6 +24,8 @@ except (AttributeError, ValueError):
     pass
 
 from reporters.telegram_sender import build_summary, send_telegram
+from fetcher.real_data_fetcher import run_real_data_fetch
+from analyst.ai_analyst import run_ai_analysis
 
 
 def main() -> int:
@@ -37,8 +39,26 @@ def main() -> int:
     print("  Gui bao cao Telegram")
     print("=" * 50)
 
-    # Build summary
-    text = build_summary()
+    # PHA 2: fetch du lieu that (vietstock) + AI phan tich
+    print("\n  [1/3] Fetch du lieu that (vietstock)...")
+    prices_report = {}
+    try:
+        prices_report = run_real_data_fetch(logger)
+    except Exception as e:
+        logger.error(f"Loi fetch du lieu that: {e}")
+        print(f"  [LOI] {e}")
+
+    print("\n  [2/3] AI phan tich (Gemini)...")
+    analysis = None
+    try:
+        analysis = run_ai_analysis(logger)
+    except Exception as e:
+        logger.error(f"Loi AI phan tich: {e}")
+        print(f"  [LOI] {e}")
+
+    # Build summary (gom du lieu that + AI)
+    print("\n  [3/3] Build summary + gui...")
+    text = build_summary(real_prices=prices_report, ai_analysis=analysis)
     print(f"\n  Tom tat bao cao ({len(text)} ky tu):")
     for line in text.splitlines():
         print(f"    {line}")

@@ -136,18 +136,21 @@ def _pick_profiles(profiles: Dict) -> Dict[str, Dict]:
     return result
 
 
-def build_summary(base_dir: str = None, config: Dict = None) -> str:
+def build_summary(base_dir: str = None, config: Dict = None,
+                  real_prices: Dict = None, ai_analysis: str = None) -> str:
     """
     Tao bao cao day du tieng Viet co dau, HTML-escape, max 4000 ky tu.
 
     Cau truc:
     1. Header: BÁO CÁO STOCK SCANNER + thoi gian Asia/Bangkok
-    2. KET NOI: tung nguon (ten, url, http_status, response_time_ms, ssl_ok)
+    2. KẾT NỐI: tung nguon (ten, url, http_status, response_time_ms, ssl_ok)
     3. DISCOVERY: probe found/khong tung nguon + tong endpoint
     4. API PROFILES: so profiles tung nguon + 3 vi du noi bat
     5. CAPABILITY: breakdown supported/unsupported/unknown tung nguon
-    6. GHI CHU: giai thich supported=0 / quality=0 (trang thai that, khong phai loi)
+    6. GHI CHÚ: giai thich supported=0 / quality=0 (trang thai that, khong phai loi)
     7. PIPELINE: step ok/failed
+    8. DU LIEU THẬT: tung ma (gia, %, khoi luong) tu real_prices (neu co)
+    9. PHÂN TÍCH AI: phan tich Gemini (neu co)
     """
     if base_dir is None:
         base_dir = str(Path(__file__).parent.parent.parent)
@@ -309,6 +312,28 @@ def build_summary(base_dir: str = None, config: Dict = None) -> str:
             lines.append("✅ Pipeline hoàn tất, không lỗi")
     else:
         lines.append("⚠️ Không có dữ liệu pipeline")
+
+    # ---------- 8. DU LIEU THẬT ----------
+    if real_prices and real_prices.get("prices"):
+        lines.append("")
+        lines.append("💹 <b>DỮ LIỆU THẬT</b> (vietstock)")
+        for p in real_prices["prices"]:
+            symbol = _html_escape(p.get("symbol", "?"))
+            price = _html_escape(p.get("price", "?"))
+            pct = _html_escape(p.get("change_percent", ""))
+            vol = _html_escape(p.get("volume", ""))
+            date = _html_escape(p.get("trading_date", ""))
+            lines.append(f"📌 {symbol}: {price} VND ({pct}) — KL {vol} ({date})")
+
+    # ---------- 9. PHÂN TÍCH AI ----------
+    if ai_analysis:
+        lines.append("")
+        lines.append("🤖 <b>PHÂN TÍCH AI</b>")
+        # Cat AI text thanh cac dong ngan, escape
+        ai_text = _html_escape(ai_analysis)
+        for para in ai_text.split("\n"):
+            if para.strip():
+                lines.append(para.strip()[:200])
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT_LENGTH:
