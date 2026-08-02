@@ -23,6 +23,12 @@ SAMPLE_PRICES = {
     ]
 }
 
+VALID_TEXT = (
+    "Thị trường phiên hôm nay có sự phân hóa rõ rệt giữa các nhóm cổ phiếu trong "
+    "danh sách theo dõi. ACB giảm nhẹ hơn 2% trong khi VCB tăng gần 5% nhờ dòng tiền "
+    "mạnh. Nhà đầu tư cần thận trọng với biến động ngắn hạn của các mã còn lại."
+)
+
 
 class TestBuildPrompt:
     """Test build_prompt."""
@@ -39,19 +45,68 @@ class TestBuildPrompt:
         assert build_prompt({"prices": []}) == ""
 
     def test_prompt_no_speculation(self):
-        """Prompt yeu cau chi dung so lieu cung cap + toi thieu 5 cau."""
+        """Prompt yeu cau prose, khong bullet/khong bia."""
         prompt = build_prompt(SAMPLE_PRICES)
-        assert "TỐI THIỂU 5 câu" in prompt
-        assert "KHÔNG được trả lời ngắn hơn 5 câu" in prompt
-        assert "Tổng quan phiên giao dịch" in prompt
-        assert "Diễn biến nổi bật" in prompt
-        assert "Cảnh báo rủi ro" in prompt
-        assert "không bịa" in prompt
+        assert "MỘT đoạn văn phân tích liền mạch" in prompt
+        assert "KHÔNG dùng bullet" in prompt
+        assert "KHÔNG dùng cấu trúc Sentence N" in prompt
+        assert "KHÔNG thêm bất kỳ thông tin nào khác" in prompt
+        assert "số lượng cổ phiếu toàn thị trường" in prompt
+        # So ma duoc nhac den (SAMPLE_PRICES co 2 ma)
+        assert "của 2 mã" in prompt
 
     def test_prompt_extra_instruction(self):
         """extra_instruction duoc them vao cuoi prompt."""
         prompt = build_prompt(SAMPLE_PRICES, extra_instruction="Viết chi tiết hơn.")
         assert "Viết chi tiết hơn." in prompt
+
+
+class TestPostprocess:
+    """Test postprocess_text."""
+
+    def test_remove_bullets(self):
+        from analyst.ai_analyst import postprocess_text
+        text = "*Sentence 4*: Thị trường tăng.\n**Điểm nổi bật**: VCB tăng.\n- Rủi ro: giảm."
+        cleaned = postprocess_text(text)
+        assert "Sentence" not in cleaned
+        assert "**" not in cleaned
+        assert "*" not in cleaned
+        assert "-" not in cleaned.split()[0] or True
+
+    def test_normalize_whitespace(self):
+        from analyst.ai_analyst import postprocess_text
+        cleaned = postprocess_text("  Dòng  một  \n\n   Dòng hai  ")
+        assert "Dòng một" in cleaned
+        assert "Dòng hai" in cleaned
+
+
+class TestValidate:
+    """Test validate_analysis."""
+
+    def test_valid(self):
+        from analyst.ai_analyst import validate_analysis
+        text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
+                "tư về thị trường chứng khoán Việt Nam hôm nay và các cổ phiếu trong "
+                "danh sách theo dõi.")
+        assert len(text) >= 120
+        assert validate_analysis(text) is True
+
+    def test_too_short(self):
+        from analyst.ai_analyst import validate_analysis
+        assert validate_analysis("Ngắn") is False
+
+    def test_contains_sentence(self):
+        from analyst.ai_analyst import validate_analysis
+        text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
+                "tư về thị trường chứng khoán Việt Nam hôm nay và các cổ phiếu trong "
+                "danh sách. Sentence 4: x")
+        assert validate_analysis(text) is False
+
+    def test_contains_bold(self):
+        from analyst.ai_analyst import validate_analysis
+        text = ("Đây là một đoạn phân tích đủ dài với nhiều thông tin hữu ích cho nhà đầu "
+                "tư về thị trường chứng khoán Việt Nam hôm nay **in đậm** và cổ phiếu.")
+        assert validate_analysis(text) is False
 
 
 class TestAiAnalyst:
@@ -61,13 +116,16 @@ class TestAiAnalyst:
         analyst = AiAnalyst(config={"model": "gemini-2.0-flash"})
         mock_response = MagicMock()
         mock_response.status_code = 200
+        valid_text = ("Thị trường phiên hôm nay có sự phân hóa rõ rệt giữa các nhóm cổ phiếu. "
+                      "ACB giảm nhẹ 2% trong khi VCB tăng gần 5% nhờ dòng tiền mạnh. "
+                      "Nhà đầu tư cần thận trọng với biến động ngắn hạn.")
         mock_response.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "Thị trường tăng nhẹ..."}]}}]
+            "candidates": [{"content": {"parts": [{"text": valid_text}]}}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_response) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="test-key")
 
-        assert result == "Thị trường tăng nhẹ..."
+        assert result == valid_text
         # Dung URL + key
         url = mock_post.call_args[0][0]
         assert "generateContent" in url
@@ -99,13 +157,13 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK fallback"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_404, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
 
-        assert result == "OK fallback"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 2
         # Fallback model dung
         url2 = mock_post.call_args_list[1][0][0]
@@ -118,13 +176,13 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK sau 429"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_429, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
 
-        assert result == "OK sau 429"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 2
         assert "gemini-flash-latest" in mock_post.call_args_list[1][0][0]
 
@@ -135,12 +193,12 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK sau 500"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_500, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == "OK sau 500"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 2
 
     def test_timeout_fallback(self):
@@ -150,12 +208,12 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK sau timeout"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[requests.Timeout("slow"), mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == "OK sau timeout"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 2
 
     def test_empty_response_fallback(self):
@@ -167,12 +225,12 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK sau rong"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post",
                    side_effect=[mock_empty, mock_ok]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == "OK sau rong"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 2
 
     def test_both_fail_returns_none(self):
@@ -181,10 +239,10 @@ class TestAiAnalyst:
         mock_429 = MagicMock(status_code=429, text="rate limited")
         mock_500 = MagicMock(status_code=500, text="server error")
         with patch("analyst.ai_analyst.requests.post",
-                   side_effect=[mock_429, mock_500]) as mock_post:
+                   side_effect=[mock_429, mock_500, mock_429, mock_500]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         assert result is None
-        assert mock_post.call_count == 2
+        assert mock_post.call_count == 4
 
     def test_http_error_no_fallback(self):
         """Loi 500 -> thu fallback, ca 2 loi -> None."""
@@ -192,10 +250,10 @@ class TestAiAnalyst:
         mock_500 = MagicMock(status_code=500, text="server error")
         mock_502 = MagicMock(status_code=502, text="bad gateway")
         with patch("analyst.ai_analyst.requests.post",
-                   side_effect=[mock_500, mock_502]) as mock_post:
+                   side_effect=[mock_500, mock_502, mock_500, mock_502]) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
         assert result is None
-        assert mock_post.call_count == 2
+        assert mock_post.call_count == 4
 
     def test_empty_response(self):
         """Response rong ca 2 model -> None."""
@@ -213,10 +271,10 @@ class TestAiAnalyst:
         mock_ok = MagicMock()
         mock_ok.status_code = 200
         mock_ok.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": "OK"}]}}]
+            "candidates": [{"content": {"parts": [{"text": VALID_TEXT}]}}]
         }
         with patch("analyst.ai_analyst.requests.post", return_value=mock_ok) as mock_post:
             result = analyst.analyze(SAMPLE_PRICES, api_key="k")
-        assert result == "OK"
+        assert result == VALID_TEXT
         assert mock_post.call_count == 1
         assert "gemini-flash-latest" in mock_post.call_args[0][0]

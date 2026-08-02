@@ -8,6 +8,7 @@ Security: API key tu env GEMINI_API_KEY (CI: GitHub secrets).
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -50,19 +51,55 @@ def build_prompt(prices_report: Dict[str, Any],
             f"mở cửa {p.get('open')}, cao {p.get('high')}, thấp {p.get('low')}"
         )
 
+    num_symbols = len(prices)
     lines.append("")
     lines.append(
-        "Yêu cầu: Hãy viết phân tích TỐI THIỂU 5 câu hoàn chỉnh, theo đúng 3 phần: "
-        "[1] Tổng quan phiên giao dịch - 2 câu, "
-        "[2] Diễn biến nổi bật và điểm đáng chú ý - 2 câu, "
-        "[3] Cảnh báo rủi ro - 1 câu. "
-        "KHÔNG được trả lời ngắn hơn 5 câu. "
-        "Chỉ dùng số liệu được cung cấp, không thêm số liệu khác, không bịa."
+        f"Yêu cầu: Viết MỘT đoạn văn phân tích liền mạch (prose), KHÔNG dùng bullet, "
+        f"KHÔNG dùng cấu trúc Sentence N hay đánh số câu. Tối thiểu 3 câu, tối đa 5 câu, "
+        f"tiếng Việt. Nội dung: (a) tóm tắt phiên giao dịch của {num_symbols} mã, "
+        f"(b) điểm nổi bật, (c) cảnh báo rủi ro. "
+        f"CHỈ nhắc đến {num_symbols} mã trong danh sách, KHÔNG thêm bất kỳ thông tin nào khác "
+        f"(số lượng cổ phiếu toàn thị trường, chỉ số, tin tức, con số ngoài danh sách)."
     )
     if extra_instruction:
         lines.append("")
         lines.append(extra_instruction)
     return "\n".join(lines)
+
+
+def postprocess_text(text: str) -> str:
+    """
+    Xoa ky tu dau danh sach (*, **, #, -, 'Sentence N:') roi normalize khoang trang.
+    """
+    if not text:
+        return text
+    # Xoa ky tu bullet dau dong (ke ca *Sentence 4*: dang co dau sao)
+    lines = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\s*\*{1,2}\s*", "", line)
+        cleaned = re.sub(r"^\s*Sentence\s*\d+\s*[:.*]*\s*", "", cleaned)
+        cleaned = re.sub(r"^\s*(?:#|-|•)\s*", "", cleaned)
+        # Xoa ky tu bullet con sot giua chuoi
+        cleaned = cleaned.replace("**", "").replace("*", "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return " ".join(lines)
+
+
+def validate_analysis(text: str, min_length: int = 120) -> bool:
+    """
+    Validation: text >= 120 ky tu VA KHONG chua 'Sentence' hoac '**'.
+    Tra False neu vi pham.
+    """
+    if not text or len(text) < min_length:
+        return False
+    lower = text.lower()
+    if "sentence" in lower:
+        return False
+    if "**" in text:
+        return False
+    return True
 
 
 class AiAnalyst:
@@ -101,37 +138,56 @@ class AiAnalyst:
         if FALLBACK_MODEL != self.model:
             models_to_try.append(FALLBACK_MODEL)
 
-        for model in models_to_try:
-            try:
-                url = GEMINI_URL.format(model=model)
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.4,
-                        "maxOutputTokens": 1200,
-                        "candidateCount": 1,
-                    },
-                }
-                resp = requests.post(
-                    url, params={"key": api_key}, json=payload,
-                    timeout=self.timeout,
-                    headers={"Content-Type": "application/json"},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    text = (data.get("candidates") or [{}])[0] \
-                        .get("content", {}).get("parts", [{}])[0].get("text", "")
-                    if text:
-                        self.logger.info(f"Gemini {model} phan tich OK ({len(text)} chars)")
-                        return text
-                    self.logger.warning(f"Gemini {model}: response rong")
-                else:
-                    self.logger.warning(
-                        f"Gemini {model} -> {resp.status_code}: {resp.text[:200]}"
+        # Retry 1 lan neu text khong dat validation
+        for attempt in range(2):
+            for model in models_to_try:
+                try:
+                    url = GEMINI_URL.format(model=model)
+                    payload = {
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "temperature": 0.4,
+                            "maxOutputTokens": 1200,
+                            "candidateCount": 1,
+                        },
+                    }
+                    resp = requests.post(
+                        url, params={"key": api_key}, json=payload,
+                        timeout=self.timeout,
+                        headers={"Content-Type": "application/json"},
                     )
-            except requests.RequestException as e:
-                self.logger.warning(f"Gemini {model} loi: {e}")
-            # Loi (404/429/5xx/timeout/rong) -> thu model tiep theo
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        text = (data.get("candidates") or [{}])[0] \
+                            .get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if text:
+                            text = postprocess_text(text)
+                            if validate_analysis(text):
+                                self.logger.info(
+                                    f"Gemini {model} phan tich OK ({len(text)} chars)"
+                                )
+                                return text
+                            self.logger.warning(
+                                f"Gemini {model}: khong dat validation (lan {attempt + 1})"
+                            )
+                        else:
+                            self.logger.warning(f"Gemini {model}: response rong")
+                    else:
+                        self.logger.warning(
+                            f"Gemini {model} -> {resp.status_code}: {resp.text[:200]}"
+                        )
+                except requests.RequestException as e:
+                    self.logger.warning(f"Gemini {model} loi: {e}")
+                # Loi (404/429/5xx/timeout/rong) -> thu model tiep theo
+            # Het models -> retry 1 lan voi prompt co them yeu cau sach
+            if attempt == 0:
+                prompt = build_prompt(
+                    prices_report,
+                    extra_instruction=(
+                        "Lưu ý: phải viết liền mạch, không bullet, không đánh số câu, "
+                        "chỉ dùng dữ liệu trong danh sách."
+                    ),
+                )
         return None
 
     def analyze_with_prompt(self, extra_instruction: str,

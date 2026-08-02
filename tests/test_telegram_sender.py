@@ -52,13 +52,56 @@ class TestBuildSummary:
             json.dumps({"generated_at": "2026-08-02T10:00:00"}), encoding="utf-8")
 
     def test_header(self, tmp_path):
-        """Header moi + gio Viet Nam + phien."""
+        """Header moi + gio Viet Nam (UTC+7, khong dung generated_at)."""
         self._write_reports(tmp_path)
         text = build_summary(str(tmp_path), real_prices=make_real_prices())
         assert "BÁO CÁO CHỨNG KHOÁN" in text
         assert "giờ Việt Nam, UTC+7" in text
         assert "Asia/Bangkok" not in text
+        # generated_at 10:00 KHONG duoc dung - gio = now UTC + 7
         assert "Dữ liệu phiên: 31/07/2026" in text
+
+    def test_header_timezone_utc_mock(self, tmp_path, monkeypatch):
+        """Mock runner UTC -> hien thi dung +7."""
+        import datetime as dt_mod
+        self._write_reports(tmp_path)
+        fixed_utc = dt_mod.datetime(2026, 8, 2, 10, 30, tzinfo=dt_mod.timezone.utc)
+        monkeypatch.setattr("reporters.telegram_sender.datetime", dt_mod)
+        # Patch datetime.now co dinh
+        class FakeDT(dt_mod.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_utc if tz else fixed_utc
+        monkeypatch.setattr("reporters.telegram_sender.datetime", FakeDT)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        # UTC 10:30 -> VN 17:30
+        assert "17:30" in text
+        assert "10:30" not in text
+
+    def test_header_timezone_no_tzdata(self, tmp_path, monkeypatch):
+        """Thieu tzdata -> fallback UTC+7 co dinh, van dung gio."""
+        import builtins
+        import datetime as dt_mod
+        self._write_reports(tmp_path)
+
+        class FakeDT(dt_mod.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return dt_mod.datetime(2026, 8, 2, 10, 30, tzinfo=dt_mod.timezone.utc)
+
+        monkeypatch.setattr("reporters.telegram_sender.datetime", FakeDT)
+        # ZoneInfo import fail (thieu tzdata)
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "zoneinfo":
+                raise ImportError("No module named 'zoneinfo'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        text = build_summary(str(tmp_path), real_prices=make_real_prices())
+        # UTC 10:30 + 7 = 17:30
+        assert "17:30" in text
 
     def test_market_section(self, tmp_path):
         """THI TRUONG: so ma tang/giam/dung + tong KL."""
@@ -68,18 +111,20 @@ class TestBuildSummary:
         assert "Tăng: 2" in text
         assert "Giảm: 1" in text
         assert "Đứng giá: 0" in text
+        # Tong KL: 15,165,000 + 18,314,600 + 6,253,600 = 39,733,200 -> 39.7 triệu
         assert "Tổng khối lượng" in text
+        assert "39.7 triệu cổ phiếu" in text
 
     def test_watchlist_section(self, tmp_path):
-        """WATCHLIST: tung ma 1 dong gon."""
+        """WATCHLIST: KL don vi trieu (tr)."""
         self._write_reports(tmp_path)
         text = build_summary(str(tmp_path), real_prices=make_real_prices())
         assert "WATCHLIST" in text
-        assert "📌 ACB: 21,900 VND (-2.01%) | KL 15,165,000" in text
-        assert "📌 VCB: 59,300 VND (+4.96%) | KL 18,314,600" in text
-        assert "📌 FPT: 67,100 VND (+0.15%) | KL 6,253,600" in text
-        # Khong con ngoac kep
+        assert "📌 ACB: 21,900 VND (-2.01%) | KL 15.2 tr" in text
+        assert "📌 VCB: 59,300 VND (+4.96%) | KL 18.3 tr" in text
+        # Khong con ngoac kep va khong con KL that
         assert "((-2.01%))" not in text
+        assert "KL 15,165,000" not in text
 
     def test_highlights_section(self, tmp_path):
         """DIEM NHAN: top tang + top giam."""

@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,16 +49,18 @@ def _html_escape(text: Any) -> str:
 
 def _format_time(generated_at: Any = None) -> str:
     """
-    Format thoi gian truc tiep tu generated_at (da la gio dia phuong cua may,
-    gio Viet Nam = UTC+7, khong chuyen doi - khong cong/bot gio).
+    Hien thi thoi gian gio Viet Nam (UTC+7).
+    Lay datetime.now(timezone.utc) (khong dung generated_at - GitHub runner la UTC,
+    nhung generated_at local co the khac) roi chuyen sang Asia/Ho_Chi_Minh.
     """
-    if isinstance(generated_at, str):
-        try:
-            dt = datetime.fromisoformat(generated_at)
-            return dt.strftime("%d/%m/%Y %H:%M")
-        except (ValueError, TypeError):
-            pass
-    return datetime.now().strftime("%d/%m/%Y %H:%M")
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(timezone.utc)
+        vn = now.astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
+        return vn.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        # Fallback: VN co dinh UTC+7 (khong DST), dung neu thieu tzdata
+        return (datetime.now(timezone.utc) + timedelta(hours=7)).strftime("%d/%m/%Y %H:%M")
 
 
 def _num(value: Any) -> float:
@@ -98,6 +100,22 @@ def _pct_display(pct_str: Any) -> str:
     if s:
         return f"({s})"
     return ""
+
+
+def _format_volume(value: Any) -> str:
+    """KL tung ma: doi sang trieu (tr), 1 chu so thap phan. VD: 15,165,000 -> '15.2 tr'."""
+    num = _num(value)
+    if num <= 0:
+        return "0"
+    return f"{num / 1_000_000:.1f} tr"
+
+
+def _format_total_volume(value: Any) -> str:
+    """Tong KL: trieu co phieu, 1 chu so thap phan. VD: 101,147,200 -> '101.1 triệu cổ phiếu'."""
+    num = _num(value)
+    if num <= 0:
+        return "0"
+    return f"{num / 1_000_000:.1f} triệu cổ phiếu"
 
 
 def _summarize_ai(text: str, ai_analyst=None, prices_report: Dict = None) -> Optional[str]:
@@ -167,7 +185,7 @@ def build_summary(base_dir: str = None, config: Dict = None,
         flat = len(prices) - up - down
         total_vol = sum(_num(p.get("volume")) for p in prices)
         lines.append(f"📈 Tăng: {up} | 📉 Giảm: {down} | ➖ Đứng giá: {flat}")
-        lines.append(f"🔢 Tổng khối lượng (watchlist {len(prices)} mã): {total_vol:,.0f}")
+        lines.append(f"🔢 Tổng khối lượng (watchlist {len(prices)} mã): {_format_total_volume(total_vol)}")
     else:
         lines.append("⚠️ Không có dữ liệu giá")
     lines.append("")
@@ -179,7 +197,7 @@ def build_summary(base_dir: str = None, config: Dict = None,
             symbol = _html_escape(p.get("symbol", "?"))
             price = _html_escape(p.get("price", "?"))
             pct = _html_escape(_pct_display(p.get("change_percent")))
-            vol = _html_escape(p.get("volume", ""))
+            vol = _html_escape(_format_volume(p.get("volume")))
             lines.append(f"📌 {symbol}: {price} VND {pct} | KL {vol}")
     else:
         lines.append("⚠️ Chưa có dữ liệu giá thật")
