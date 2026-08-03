@@ -199,12 +199,14 @@ def build_summary(base_dir: str = None, config: Dict = None,
 
     # ---------- 3. WATCHLIST ----------
     lines.append("📋 <b>WATCHLIST</b>")
+    watchlist_line_indices = []
     if prices:
         for p in prices:
             symbol = _html_escape(p.get("symbol", "?"))
             price = _html_escape(p.get("price", "?"))
             pct = _html_escape(_pct_display(p.get("change_percent")))
             vol = _html_escape(_format_volume(p.get("volume")))
+            watchlist_line_indices.append(len(lines))
             lines.append(f"📌 {symbol}: {price} VND {pct} | KL {vol}")
     else:
         lines.append("⚠️ Chưa có dữ liệu giá thật")
@@ -237,7 +239,7 @@ def build_summary(base_dir: str = None, config: Dict = None,
         lines.append("🤖 <b>PHÂN TÍCH AI</b>")
         for para in _html_escape(ai_text).split("\n"):
             if para.strip():
-                lines.append(para.strip()[:300])
+                lines.append(para.strip())
         lines.append("")
     elif ai_analysis is not None:
         # Co AI text nhung qua ngan va khong the lam dai hon
@@ -257,7 +259,17 @@ def build_summary(base_dir: str = None, config: Dict = None,
 
     text = "\n".join(lines)
     if len(text) > MAX_TEXT_LENGTH:
-        text = text[: MAX_TEXT_LENGTH - 3] + "..."
+        # Uu tien giu PHAN TICH AI tron ven: cat bot dan cac dong WATCHLIST
+        # (tu cuoi len) cho den khi vua gioi han. PHAN TICH AI + DIEM NHAN
+        # + THI TRUONG + DISCLAIMER van day du.
+        for idx in reversed(watchlist_line_indices):
+            lines.pop(idx)
+            if len("\n".join(lines)) <= MAX_TEXT_LENGTH:
+                break
+        text = "\n".join(lines)
+        if len(text) > MAX_TEXT_LENGTH:
+            # Truong hop cuc ky hiem: van vuot sau khi bo het WATCHLIST
+            text = text[: MAX_TEXT_LENGTH - 3] + "..."
     return text
 
 

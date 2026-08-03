@@ -214,6 +214,30 @@ class TestBuildSummary:
                              ai_analysis="Phân tích dài. " * 100)
         assert len(text) <= 4000
 
+    def test_ai_kept_whole_over_limit(self, tmp_path):
+        """AI text dai + watchlist day du -> PHAN TICH AI khong bi cat,
+        cat bot WATCHLIST truoc, len <= 4000."""
+        self._write_reports(tmp_path)
+        ai_tail = "Đây là phần kết thúc quan trọng của phân tích không được cắt bỏ."
+        long_analysis = ("Thị trường chứng khoán Việt Nam phiên hôm nay ghi nhận "
+                         "sự phân hóa rõ rệt giữa các nhóm cổ phiếu ngân hàng và "
+                         "bất động sản. Dòng tiền tập trung vào nhóm cổ phiếu trụ "
+                         "cột, giúp chỉ số giữ vững trong biên độ hẹp. ACB giảm "
+                         "hơn 2% do áp lực chốt lời, trong khi VCB tăng gần 5% "
+                         "nhờ kết quả kinh doanh tích cực. Nhà đầu tư cần theo "
+                         "dõi sát diễn biến khối ngoại và thanh khoản để có quyết "
+                         "định hợp lý. " * 8) + ai_tail
+        assert len(long_analysis) > 2840  # Du de vuot gioi han khi + watchlist
+        text = build_summary(str(tmp_path), real_prices=make_real_prices(),
+                             ai_analysis=long_analysis)
+        assert len(text) <= 4000
+        # PHAN TICH AI tron ven - khong cat giua cau
+        assert ai_tail in text
+        # WATCHLIST bi cat bot (khong con day du 10 ma)
+        assert "WATCHLIST" in text
+        watch_count = text.count("📌")
+        assert 0 <= watch_count < 10
+
     def test_html_escaped(self, tmp_path):
         """Ky tu HTML duoc escape."""
         self._write_reports(tmp_path)
