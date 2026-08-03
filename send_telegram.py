@@ -44,6 +44,14 @@ def main() -> int:
     prices_report = {}
     try:
         prices_report = run_real_data_fetch(logger)
+        # Luu lich su gia (chi khi fetch OK: error_count == 0 va co prices)
+        try:
+            from fetcher.real_data_fetcher import append_price_history
+            history_path = append_price_history(prices_report, logger=logger)
+            if history_path:
+                logger.info(f"Da luu lich su gia: {history_path}")
+        except Exception as e:
+            logger.warning(f"Loi ghi lich su gia (khong fail): {e}")
     except Exception as e:
         logger.error(f"Loi fetch du lieu that: {e}")
         print(f"  [LOI] {e}")

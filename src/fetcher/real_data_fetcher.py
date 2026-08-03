@@ -228,3 +228,77 @@ def run_real_data_fetch(logger: logging.Logger = None) -> Dict[str, Any]:
     for p in report.get("prices", [])[:3]:
         print(f"    - {p['symbol']}: {p['price']} ({p['change_percent']}) vol={p['volume']} {p['trading_date']}")
     return report
+
+
+def append_price_history(report: Dict[str, Any], base_dir: Path = None,
+                         logger: logging.Logger = None) -> Optional[str]:
+    """
+    Ghi 1 dong JSON compact vao data/prices_history.jsonl (sau moi lan scan OK).
+    Dinh dang moi dong:
+      {"trading_date": "31/07/2026 14:58", "generated_at": "...",
+       "prices": [{"symbol", "price", "change_percent", "volume"}, ...]}
+    - Neu da co dong cung trading_date -> THAY THE (so lieu moi nhat).
+    - Neu trading_date moi -> append.
+    - KHONG ghi khi fetch loi (error_count > 0) hoac prices rong / thieu trading_date.
+    Tra path file da ghi hoac None (khong ghi).
+    """
+    if logger is None:
+        logger = logging.getLogger("real_data_fetcher")
+    if base_dir is None:
+        base_dir = Path(__file__).parent.parent.parent
+    base_dir = Path(base_dir)
+
+    prices = report.get("prices") or []
+    error_count = report.get("error_count", 0)
+    if error_count > 0 or not prices:
+        logger.warning("Bo qua ghi lich su gia: fetch loi hoac khong co gia")
+        return None
+    trading_date = prices[0].get("trading_date")
+    if not trading_date:
+        logger.warning("Bo qua ghi lich su gia: thieu trading_date")
+        return None
+
+    entry = {
+        "trading_date": trading_date,
+        "generated_at": report.get("generated_at") or datetime.now().isoformat(),
+        "prices": [
+            {
+                "symbol": p.get("symbol"),
+                "price": p.get("price"),
+                "change_percent": p.get("change_percent"),
+                "volume": p.get("volume"),
+            }
+            for p in prices
+        ],
+    }
+
+    data_dir = base_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    history_path = data_dir / "prices_history.jsonl"
+
+    lines = []
+    replaced = False
+    if history_path.exists():
+        with open(history_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    # Giu nguyen dong loi (khong mat du lieu cu)
+                    lines.append(line)
+                    continue
+                if rec.get("trading_date") == trading_date:
+                    lines.append(json.dumps(entry, ensure_ascii=False))
+                    replaced = True
+                else:
+                    lines.append(line)
+    if not replaced:
+        lines.append(json.dumps(entry, ensure_ascii=False))
+
+    with open(history_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    logger.info(f"Da ghi lich su gia: {history_path} ({len(lines)} dong)")
+    return str(history_path)
