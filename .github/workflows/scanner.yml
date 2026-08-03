@@ -7,6 +7,9 @@ on:
   schedule:
     - cron: "0 8 * * *"
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -39,8 +42,45 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: Commit price history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add data/prices_history.jsonl
+          if git diff --quiet --cached; then
+            echo "No changes to price history"
+          else
+            git commit -m "Update price history"
+            git push origin main
+          fi
       - name: Upload output artifact
         uses: actions/upload-artifact@v4
         with:
           name: scanner-output
           path: output/
+
+  review:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cron: "0 8 * * 6"
+            period: weekly
+          - cron: "0 8 1 * *"
+            period: monthly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run review
+        run: python -m src.reviewer.weekly_review --period ${{ matrix.period }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
