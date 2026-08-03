@@ -1,5 +1,11 @@
 name: stock-scanner
 
+# Chay TUAN TU giua cac run (workflow_dispatch + push + schedule)
+# tranh conflict khi nhieu run cung commit data/prices_history.jsonl
+concurrency:
+  group: stock-scanner
+  cancel-in-progress: false
+
 on:
   push:
   pull_request:
